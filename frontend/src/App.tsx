@@ -5,8 +5,8 @@ import {
   apiUrl,
   createAudioObjectUrl,
   processVoiceTurn,
-  synthesizeResponse,
 } from "./api/voiceApi";
+import { RealtimeConversation, type RealtimeState } from "./realtime";
 import {
   clearSavedConversations,
   createConversationId,
@@ -31,12 +31,22 @@ function App() {
   );
   const [error, setError] = useState("");
   const [playingTurnId, setPlayingTurnId] = useState("");
-  const [retryingTurnId, setRetryingTurnId] = useState("");
+  const [realtimeState, setRealtimeState] = useState<RealtimeState>("ended");
+  const [liveTranscript, setLiveTranscript] = useState("");
+  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const realtimeRef = useRef<RealtimeConversation | null>(null);
+  const liveQuestionRef = useRef("");
+  const liveAnswerRef = useRef("");
   const chunksRef = useRef<Blob[]>([]);
   const requestInFlightRef = useRef(false);
   const requestGenerationRef = useRef(0);
   const audioUrlsRef = useRef<string[]>([]);
+  const conversationRef = useRef<HTMLDivElement | null>(null);
+  const conversationEndRef = useRef<HTMLDivElement | null>(null);
+  const scrollBehaviorRef = useRef<ScrollBehavior>("smooth");
+  const programmaticScrollRef = useRef(false);
+  const scrollUnlockTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     checkBackend().then(() => setBackendOnline(true)).catch(() => setBackendOnline(false));
@@ -46,21 +56,53 @@ function App() {
     saveConversations(conversations);
   }, [conversations]);
 
+  useEffect(() => {
+    if (!shouldAutoScroll) return;
+    const scrollToLatest = () => {
+      const container = conversationRef.current;
+      if (!container) return;
+      programmaticScrollRef.current = true;
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: scrollBehaviorRef.current,
+      });
+      conversationEndRef.current?.scrollIntoView({
+        block: "end",
+        behavior: scrollBehaviorRef.current,
+      });
+      scrollBehaviorRef.current = "auto";
+      if (scrollUnlockTimeoutRef.current !== null) {
+        window.clearTimeout(scrollUnlockTimeoutRef.current);
+      }
+      scrollUnlockTimeoutRef.current = window.setTimeout(() => {
+        programmaticScrollRef.current = false;
+        scrollUnlockTimeoutRef.current = null;
+      }, 450);
+    };
+    const frameId = requestAnimationFrame(scrollToLatest);
+    const resizeObserver = typeof ResizeObserver === "undefined"
+      ? null
+      : new ResizeObserver(() => {
+        if (shouldAutoScroll) requestAnimationFrame(scrollToLatest);
+      });
+    if (resizeObserver && conversationRef.current) {
+      resizeObserver.observe(conversationRef.current);
+    }
+    return () => {
+      cancelAnimationFrame(frameId);
+      resizeObserver?.disconnect();
+      if (scrollUnlockTimeoutRef.current !== null) {
+        window.clearTimeout(scrollUnlockTimeoutRef.current);
+        scrollUnlockTimeoutRef.current = null;
+      }
+      programmaticScrollRef.current = false;
+    };
+  }, [conversations, liveTranscript, realtimeState, shouldAutoScroll]);
+
   useEffect(() => () => {
+    realtimeRef.current?.close();
     audioUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
   }, []);
-
-  const addAudio = (turnId: string, base64: string, contentType: string) => {
-    const url = createAudioObjectUrl(base64, contentType);
-    audioUrlsRef.current.push(url);
-    setConversations((current) =>
-      current.map((turn) =>
-        turn.id === turnId
-          ? { ...turn, audioUrl: url, ttsError: undefined }
-          : turn,
-      ),
-    );
-  };
 
   const startRecording = async () => {
     if (isStarting || isTranscribing || requestInFlightRef.current || recorderRef.current) return;
@@ -73,7 +115,14 @@ function App() {
     let stream: MediaStream | undefined;
     try {
       setIsStarting(true);
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      });
       const supportedMimeTypes = [
         "audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus",
         "audio/ogg", "audio/mp4",
@@ -84,6 +133,7 @@ function App() {
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) chunksRef.current.push(event.data);
       };
+
       recorder.onerror = () => {
         stream?.getTracks().forEach((track) => track.stop());
         recorderRef.current = null;
@@ -143,34 +193,90 @@ function App() {
       setIsStarting(false);
     }
   };
+  void startRecording;
+
+  const startRealtimeConversation = async () => {
+    if (realtimeRef.current || isStarting || isRecording || isTranscribing) return;
+    setError("");
+    if (!window.isSecureContext && window.location.hostname !== "localhost") {
+      setError("Realtime microphone access requires HTTPS or localhost.");
+      return;
+    }
+    const commitLiveTurn = (status: "complete" | "interrupted") => {
+      const question = liveQuestionRef.current.trim();
+      const answer = liveAnswerRef.current.trim();
+      if (question || answer) {
+        setConversations((current) => [
+          ...current,
+          {
+            id: createConversationId(),
+            question,
+            answer,
+            createdAt: new Date().toISOString(),
+            status,
+          },
+        ]);
+      }
+      liveQuestionRef.current = "";
+      liveAnswerRef.current = "";
+      setLiveTranscript("");
+    };
+    const conversation = new RealtimeConversation({
+      onState: (state) => {
+        setRealtimeState(state);
+        if (state === "ended") realtimeRef.current = null;
+      },
+      onUserTranscript: (transcript) => {
+        const isNewQuestion = !liveQuestionRef.current.trim();
+        scrollBehaviorRef.current = isNewQuestion ? "smooth" : "auto";
+        setShouldAutoScroll(true);
+        liveQuestionRef.current = transcript;
+        setLiveTranscript(transcript);
+      },
+      onAssistantTranscript: (transcript) => {
+        scrollBehaviorRef.current = liveAnswerRef.current ? "auto" : "smooth";
+        liveAnswerRef.current += transcript;
+        setLiveTranscript(liveAnswerRef.current);
+      },
+      onTurnComplete: () => {
+        scrollBehaviorRef.current = "smooth";
+        commitLiveTurn("complete");
+      },
+      onTurnInterrupted: () => {
+        scrollBehaviorRef.current = "smooth";
+        commitLiveTurn("interrupted");
+      },
+      onError: (realtimeError) => setError(realtimeError.message),
+    });
+    realtimeRef.current = conversation;
+    liveQuestionRef.current = "";
+    liveAnswerRef.current = "";
+    setLiveTranscript("");
+    try {
+      await conversation.connect();
+    } catch (realtimeError) {
+      realtimeRef.current = null;
+      setError(
+        realtimeError instanceof Error
+          ? realtimeError.message
+          : "Could not start the realtime conversation.",
+      );
+    }
+  };
+
+  const endRealtimeConversation = () => {
+    realtimeRef.current?.close();
+    realtimeRef.current = null;
+    liveQuestionRef.current = "";
+    liveAnswerRef.current = "";
+    setLiveTranscript("");
+  };
 
   const stopRecording = () => {
     const recorder = recorderRef.current;
     if (!recorder || recorder.state === "inactive") return;
     recorder.stop();
     setIsRecording(false);
-  };
-
-  const retryAudio = async (turn: ConversationTurn) => {
-    if (retryingTurnId) return;
-    setRetryingTurnId(turn.id);
-    setConversations((current) =>
-      current.map((item) => item.id === turn.id ? { ...item, ttsError: undefined } : item),
-    );
-    try {
-      const result = await synthesizeResponse(turn.answer);
-      addAudio(turn.id, result.audio_base64, result.audio_content_type);
-    } catch (synthesisError) {
-      setConversations((current) =>
-        current.map((item) =>
-          item.id === turn.id
-            ? { ...item, ttsError: synthesisError instanceof Error ? synthesisError.message : "Speech synthesis failed." }
-            : item,
-        ),
-      );
-    } finally {
-      setRetryingTurnId("");
-    }
   };
 
   const clearHistory = () => {
@@ -181,22 +287,49 @@ function App() {
     setConversations([]);
     setError("");
     setPlayingTurnId("");
+    setShouldAutoScroll(true);
     clearSavedConversations();
   };
 
+  const handleConversationScroll = () => {
+    if (programmaticScrollRef.current) return;
+    const container = conversationRef.current;
+    if (!container) return;
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    const isAtLatest = distanceFromBottom < 72;
+    setShouldAutoScroll((current) => current === isAtLatest ? current : isAtLatest);
+  };
+
+  const jumpToLatest = () => {
+    setShouldAutoScroll(true);
+    conversationRef.current?.scrollTo({
+      top: conversationRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  };
+
+  const isLiveConversation = realtimeState !== "ended";
   const isProcessing = isStarting || isTranscribing;
   const pipelineStatus = backendOnline === null ? "Connecting"
     : !backendOnline ? "Unavailable"
     : error ? "Failed"
+    : isLiveConversation ? realtimeState === "responding" ? "Responding" : "Listening"
     : isRecording ? "Listening"
     : isProcessing ? "Processing"
     : conversations.length ? "Completed" : "Ready";
   const statusHeading = error ? "Something went wrong"
+    : isLiveConversation
+      ? realtimeState === "responding" ? "Responding..." : "Listening..."
     : isRecording ? "Listening..."
     : isProcessing ? "Processing your question..."
     : playingTurnId ? "Speaking..."
     : conversations.length ? "Response ready" : "Ready to listen";
   const statusDescription = error ? "Check the message below and try again"
+    : isLiveConversation
+      ? realtimeState === "responding"
+        ? "You can interrupt the assistant at any time"
+        : "Speak naturally; silence detects the end of your turn"
     : isRecording ? "Speak your question, then stop recording"
     : isProcessing ? "Transcribing, thinking, and preparing audio"
     : playingTurnId ? "Your answer is playing"
@@ -212,80 +345,109 @@ function App() {
           <p>A Voice AI pipeline</p>
           <div className="history-summary">
             <span>{conversations.length} {conversations.length === 1 ? "conversation" : "conversations"}</span>
+            <span className="connection-status">{pipelineStatus}</span>
             {conversations.length > 0 && (
               <button className="clear-button" type="button" onClick={clearHistory}>Clear history</button>
             )}
           </div>
         </header>
 
+        <section className="conversation-stage" aria-label="Conversation">
+          <div
+            className="conversation-list"
+            ref={conversationRef}
+            onScroll={handleConversationScroll}
+            aria-live="polite"
+          >
+            {conversations.length === 0 && !liveTranscript && (
+              <div className="empty-conversation">
+                <div className="empty-orb" aria-hidden="true"><span /><span /><span /></div>
+                <p>Ask anything and start a natural voice conversation.</p>
+              </div>
+            )}
+            {conversations.map((turn) => (
+              <div className="timeline-turn" key={turn.id}>
+                {turn.question && (
+                  <article className="chat-message user-message">
+                    <div className="message-meta">YOU</div>
+                    <p>{turn.question}</p>
+                  </article>
+                )}
+                {turn.answer && (
+                  <article className={`chat-message assistant-message ${turn.status === "interrupted" ? "interrupted-message" : ""}`}>
+                    <div className="assistant-heading">
+                      <div className="assistant-mark" aria-hidden="true"><span /><span /><span /></div>
+                      <div className="message-meta">VOXFLOW</div>
+                      {turn.status === "interrupted" && <span className="message-state">Interrupted</span>}
+                    </div>
+                    <div className="answer-text"><ReactMarkdown>{turn.answer}</ReactMarkdown></div>
+                    {turn.audioUrl ? (
+                      <audio
+                        className="audio-player" controls src={turn.audioUrl}
+                        onPlay={() => setPlayingTurnId(turn.id)}
+                        onPause={() => setPlayingTurnId((current) => current === turn.id ? "" : current)}
+                        onEnded={() => setPlayingTurnId((current) => current === turn.id ? "" : current)}
+                      />
+                    ) : turn.ttsError ? (
+                      <p className="error-message" role="alert">{turn.ttsError}</p>
+                    ) : null}
+                  </article>
+                )}
+              </div>
+            ))}
+            {isLiveConversation && liveQuestionRef.current && (
+              <article className="chat-message user-message live-message">
+                <div className="message-meta">YOU</div>
+                <p>{liveQuestionRef.current}</p>
+              </article>
+            )}
+            {isLiveConversation && liveAnswerRef.current && (
+              <article className="chat-message assistant-message live-message">
+                <div className="assistant-heading">
+                  <div className="assistant-mark" aria-hidden="true"><span /><span /><span /></div>
+                  <div className="message-meta">VOXFLOW</div>
+                  <span className="message-state">{realtimeState === "responding" ? "Speaking" : "Thinking"}</span>
+                </div>
+                <div className="answer-text"><ReactMarkdown>{liveAnswerRef.current}</ReactMarkdown></div>
+              </article>
+            )}
+            <div ref={conversationEndRef} aria-hidden="true" />
+          </div>
+          {!shouldAutoScroll && (
+            <button className="latest-button" type="button" onClick={jumpToLatest}>
+              ↓ Newest message
+            </button>
+          )}
+        </section>
+
         <section className="interaction" aria-labelledby="status-heading">
-          <button className={`record-button ${isRecording ? "recording" : ""}`} type="button"
-            onClick={isRecording ? stopRecording : startRecording} disabled={isProcessing}
-            aria-label={isRecording ? "Stop recording" : "Start recording"}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" /></svg>
-          </button>
+          <div className={`state-wave ${isLiveConversation ? "active" : ""} ${realtimeState === "responding" ? "speaking" : ""}`} aria-hidden="true">
+            <span /><span /><span /><span /><span />
+          </div>
           <h2 id="status-heading" className="status-heading" role="status">{statusHeading}</h2>
           <p className="status-description">{statusDescription}</p>
-          {!backendOnline && backendOnline !== null && <p className="error-message backend-error" role="alert">Backend unavailable. Start the API and try again.</p>}
-          {isProcessing && conversations.length > 0 && <p className="processing-note" role="status">Your previous answers remain available while this turn is processing.</p>}
-
-          <div className="conversation-list" aria-live="polite">
-            {conversations.map((turn, index) => (
-              <article className="conversation-card" key={turn.id}>
-                <div className="turn-label">YOU ASKED · {index + 1}</div>
-                <p className="question-text">{turn.question}</p>
-                <div className="turn-label assistant-label">ASSISTANT</div>
-                <div className="answer-text">
-                  <ReactMarkdown>{turn.answer}</ReactMarkdown>
-                </div>
-                {turn.audioUrl ? (
-                  <audio
-                    className="audio-player" controls src={turn.audioUrl}
-                    onPlay={() => setPlayingTurnId(turn.id)}
-                    onPause={() => setPlayingTurnId((current) => current === turn.id ? "" : current)}
-                    onEnded={() => setPlayingTurnId((current) => current === turn.id ? "" : current)}
-                  />
-                ) : turn.ttsError ? (
-                  <div className="tts-retry">
-                    <p className="error-message" role="alert">{turn.ttsError}</p>
-                    <button className="retry-button" type="button" disabled={retryingTurnId === turn.id}
-                      onClick={() => retryAudio(turn)}>
-                      {retryingTurnId === turn.id ? "Retrying audio..." : "Retry audio"}
-                    </button>
-                  </div>
-                ) : (
-                  <div className="restored-audio">
-                    <span>Audio is unavailable after reload.</span>
-                    <button className="retry-button" type="button" disabled={retryingTurnId === turn.id}
-                      onClick={() => retryAudio(turn)}>
-                      {retryingTurnId === turn.id ? "Generating..." : "Generate audio"}
-                    </button>
-                  </div>
-                )}
-              </article>
-            ))}
+          <div className="voice-controls">
+            <button className={`record-button ${isLiveConversation ? "recording" : ""}`} type="button"
+              onClick={isLiveConversation ? endRealtimeConversation : startRealtimeConversation}
+              disabled={isProcessing || isRecording}
+              aria-label={isLiveConversation ? "End live conversation" : error ? "Retry live conversation" : "Start live conversation"}>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" /></svg>
+            </button>
+            {isLiveConversation && (
+              <button className="end-session-button" type="button" onClick={endRealtimeConversation}>
+                End conversation
+              </button>
+            )}
+            {isRecording && (
+              <button className="fallback-button" type="button" onClick={stopRecording} disabled={isProcessing}>
+                Stop recording
+              </button>
+            )}
           </div>
+          {!backendOnline && backendOnline !== null && <p className="error-message backend-error" role="alert">Backend unavailable. Start the API and try again.</p>}
           {error && <p className="error-message" role="alert">{error}</p>}
         </section>
 
-        <section className="feature-grid" aria-label="Voice pipeline stages">
-          <article className="feature-card">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" /></svg>
-            <h3>Speech-to-Text</h3><p>Capture and transcribe speech</p>
-          </article>
-          <article className="feature-card">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 9.8 8.2 5 10l4.8 1.8L12 17l2.2-5.2L19 10l-4.8-1.8L12 3Z" /><path d="m19 15-.8 2.2L16 18l2.2.8L19 21l.8-2.2L22 18l-2.2-.8L19 15Z" /></svg>
-            <h3>LLM</h3><p>Generate the response</p>
-          </article>
-          <article className="feature-card">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 10v4h3l4 3V7l-4 3H5Z" /><path d="M16 9.5a4 4 0 0 1 0 5M18.5 7a7.5 7.5 0 0 1 0 10" /></svg>
-            <h3>Text-to-Speech</h3><p>Produce spoken audio</p>
-          </article>
-          <article className="feature-card">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></svg>
-            <h3>Pipeline status</h3><p>Show progress and errors</p><span className="card-status">{pipelineStatus}</span>
-          </article>
-        </section>
       </section>
     </main>
   );

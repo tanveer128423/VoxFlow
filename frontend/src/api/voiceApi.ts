@@ -9,15 +9,50 @@ export type VoiceTurnResult = TranscriptionResult & {
   tts_error: string | null
 }
 
-export type SynthesisResult = {
-  audio_base64: string
-  audio_content_type: string
+export type RealtimeSession = {
+  client_secret: string
+  model: string
+  transcription_model: string
 }
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/+$/, "")
 
 export function apiUrl(path: string): string {
   return `${apiBaseUrl}${path}`
+}
+
+export async function createRealtimeSession(): Promise<RealtimeSession> {
+  const response = await fetch(apiUrl("/api/realtime/session"), {
+    method: "POST",
+  })
+  const payload: unknown = await response.json()
+  if (!response.ok) {
+    const detail =
+      typeof payload === "object" &&
+      payload !== null &&
+      "detail" in payload &&
+      typeof payload.detail === "string"
+        ? payload.detail
+        : "Realtime voice setup failed."
+    throw new Error(detail)
+  }
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    !("client_secret" in payload) ||
+    !("model" in payload) ||
+    !("transcription_model" in payload) ||
+    typeof payload.client_secret !== "string" ||
+    typeof payload.model !== "string" ||
+    typeof payload.transcription_model !== "string"
+  ) {
+    throw new Error("The realtime session response was invalid.")
+  }
+  return {
+    client_secret: payload.client_secret,
+    model: payload.model,
+    transcription_model: payload.transcription_model,
+  }
 }
 
 export function createAudioObjectUrl(
@@ -122,40 +157,5 @@ export async function processVoiceTurn(audio: Blob): Promise<VoiceTurnResult> {
     audio_base64: payload.audio_base64,
     audio_content_type: payload.audio_content_type,
     tts_error: payload.tts_error,
-  }
-}
-
-export async function synthesizeResponse(
-  text: string,
-): Promise<SynthesisResult> {
-  const response = await fetch(apiUrl('/api/synthesize'), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
-  })
-  const payload: unknown = await response.json()
-  if (!response.ok) {
-    const detail =
-      typeof payload === 'object' &&
-      payload !== null &&
-      'detail' in payload &&
-      typeof payload.detail === 'string'
-        ? payload.detail
-        : 'Speech synthesis failed.'
-    throw new Error(detail)
-  }
-  if (
-    typeof payload !== 'object' ||
-    payload === null ||
-    !('audio_base64' in payload) ||
-    !('audio_content_type' in payload) ||
-    typeof payload.audio_base64 !== 'string' ||
-    typeof payload.audio_content_type !== 'string'
-  ) {
-    throw new Error('The speech synthesis response was invalid.')
-  }
-  return {
-    audio_base64: payload.audio_base64,
-    audio_content_type: payload.audio_content_type,
   }
 }

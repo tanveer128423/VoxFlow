@@ -7,6 +7,10 @@ class Settings(BaseSettings):
     app_env: str = "development"
     frontend_origin: str = "http://localhost:5173"
     openai_api_key: str = ""
+    realtime_model: str = "gpt-realtime-2.1-mini"
+    realtime_voice: str = "marin"
+    realtime_transcription_model: str = "gpt-4o-mini-transcribe"
+    realtime_session_rate_limit_per_minute: int = 10
     google_application_credentials: str = ""
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = ""

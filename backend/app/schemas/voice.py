@@ -23,3 +23,9 @@ class SynthesizeRequest(BaseModel):
 class SynthesizeResponse(BaseModel):
     audio_base64: str
     audio_content_type: str
+
+
+class RealtimeSessionResponse(BaseModel):
+    client_secret: str
+    model: str
+    transcription_model: str

@@ -1,4 +1,8 @@
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from collections import defaultdict
+from threading import Lock
+from time import monotonic
+
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from app.config import Settings, get_settings
 from app.providers.stt import STTError
@@ -7,6 +11,7 @@ from app.providers.tts import TTSError
 from app.schemas.voice import (
     SynthesizeRequest,
     SynthesizeResponse,
+    RealtimeSessionResponse,
     TranscriptionResponse,
     VoiceTurnResponse,
 )
@@ -16,13 +21,57 @@ from app.services.transcription import (
     transcribe_upload,
 )
 from app.services.voice_pipeline import VoicePipelineError
+from app.services.realtime import RealtimeError, create_realtime_session
 
 router = APIRouter(prefix="/api")
+_realtime_rate_limit_lock = Lock()
+_realtime_requests: dict[str, list[float]] = defaultdict(list)
+_RATE_LIMIT_WINDOW_SECONDS = 60.0
+
+
+def _check_realtime_rate_limit(client_id: str, limit: int) -> None:
+    now = monotonic()
+    window_start = now - _RATE_LIMIT_WINDOW_SECONDS
+    with _realtime_rate_limit_lock:
+        timestamps = [
+            timestamp
+            for timestamp in _realtime_requests[client_id]
+            if timestamp > window_start
+        ]
+        if len(timestamps) >= limit:
+            _realtime_requests[client_id] = timestamps
+            raise HTTPException(
+                status_code=429,
+                detail="Too many realtime session requests. Please try again later.",
+                headers={"Retry-After": "60"},
+            )
+        timestamps.append(now)
+        _realtime_requests[client_id] = timestamps
 
 
 @router.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@router.post("/realtime/session", response_model=RealtimeSessionResponse)
+async def realtime_session(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> RealtimeSessionResponse:
+    _check_realtime_rate_limit(
+        request.client.host if request.client else "unknown",
+        settings.realtime_session_rate_limit_per_minute,
+    )
+    try:
+        session = await create_realtime_session(settings)
+    except RealtimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return RealtimeSessionResponse(
+        client_secret=session.client_secret,
+        model=session.model,
+        transcription_model=session.transcription_model,
+    )
 
 
 @router.post("/transcribe", response_model=TranscriptionResponse)

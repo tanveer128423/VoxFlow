@@ -7,9 +7,13 @@ export type ConversationTurn = {
   createdAt: string
   audioUrl?: string
   ttsError?: string
+  status?: "complete" | "interrupted"
 }
 
-type PersistedTurn = Pick<ConversationTurn, "id" | "question" | "answer" | "createdAt">
+type PersistedTurn = Pick<
+  ConversationTurn,
+  "id" | "question" | "answer" | "createdAt" | "status"
+>
 
 function isPersistedTurn(value: unknown): value is PersistedTurn {
   if (!value || typeof value !== "object") return false
@@ -19,6 +23,7 @@ function isPersistedTurn(value: unknown): value is PersistedTurn {
     typeof turn.question === "string" &&
     typeof turn.answer === "string" &&
     typeof turn.createdAt === "string"
+    && (turn.status === undefined || turn.status === "complete" || turn.status === "interrupted")
   )
 }
 
@@ -37,11 +42,12 @@ export function loadConversations(): ConversationTurn[] {
 export function saveConversations(turns: ConversationTurn[]): void {
   try {
     const persisted: PersistedTurn[] = turns.map(
-      ({ id, question, answer, createdAt }) => ({
+      ({ id, question, answer, createdAt, status }) => ({
         id,
         question,
         answer,
         createdAt,
+        status,
       }),
     )
     localStorage.setItem(CONVERSATION_STORAGE_KEY, JSON.stringify(persisted))
