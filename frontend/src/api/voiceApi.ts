@@ -12,6 +12,7 @@ export type VoiceTurnResult = TranscriptionResult & {
 export type RealtimeSession = {
   client_secret: string
   model: string
+  voice: string
   transcription_model: string
 }
 
@@ -41,9 +42,11 @@ export async function createRealtimeSession(): Promise<RealtimeSession> {
     payload === null ||
     !("client_secret" in payload) ||
     !("model" in payload) ||
+    !("voice" in payload) ||
     !("transcription_model" in payload) ||
     typeof payload.client_secret !== "string" ||
     typeof payload.model !== "string" ||
+    typeof payload.voice !== "string" ||
     typeof payload.transcription_model !== "string"
   ) {
     throw new Error("The realtime session response was invalid.")
@@ -51,6 +54,7 @@ export async function createRealtimeSession(): Promise<RealtimeSession> {
   return {
     client_secret: payload.client_secret,
     model: payload.model,
+    voice: payload.voice,
     transcription_model: payload.transcription_model,
   }
 }

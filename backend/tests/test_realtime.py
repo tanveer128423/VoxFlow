@@ -33,6 +33,7 @@ async def test_realtime_session_uses_ephemeral_secret_without_exposing_standard_
 
     assert session.client_secret == "ek_test_ephemeral"
     assert session.model == "gpt-realtime-2.1-mini"
+    assert session.voice == "marin"
     assert session.transcription_model == "gpt-4o-mini-transcribe"
     assert request_seen is not None
     assert request_seen.url == "https://api.openai.com/v1/realtime/client_secrets"

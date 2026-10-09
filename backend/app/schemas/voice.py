@@ -28,4 +28,5 @@ class SynthesizeResponse(BaseModel):
 class RealtimeSessionResponse(BaseModel):
     client_secret: str
     model: str
+    voice: str
     transcription_model: str

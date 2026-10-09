@@ -13,6 +13,7 @@ type RealtimeCallbacks = {
   onTurnComplete: () => void
   onTurnInterrupted: () => void
   onError: (error: Error) => void
+  onAudioPlaybackError: (error: Error) => void
 }
 
 export class RealtimeConversation {
@@ -29,6 +30,8 @@ export class RealtimeConversation {
     this.callbacks = callbacks
     this.remoteAudio = new Audio()
     this.remoteAudio.autoplay = true
+    this.remoteAudio.muted = false
+    this.remoteAudio.volume = 1
   }
 
   async connect(): Promise<void> {
@@ -52,16 +55,26 @@ export class RealtimeConversation {
       const session = await createRealtimeSession()
       const peerConnection = new RTCPeerConnection()
       this.peerConnection = peerConnection
+      peerConnection.ontrack = (event) => {
+        const stream = event.streams[0] ?? new MediaStream([event.track])
+        this.remoteAudio.srcObject = stream
+        console.info("[VoxFlow] Remote audio track received.", {
+          kind: event.track.kind,
+          readyState: event.track.readyState,
+          muted: event.track.muted,
+        })
+        void this.playRemoteAudio().catch(() => undefined)
+      }
       this.microphoneStream.getAudioTracks().forEach((track) => {
         peerConnection.addTrack(track, this.microphoneStream as MediaStream)
       })
-      peerConnection.ontrack = (event) => {
-        this.remoteAudio.srcObject = event.streams[0]
-        void this.remoteAudio.play().catch(() => undefined)
-      }
       peerConnection.addEventListener(
         "connectionstatechange",
         this.handleConnectionStateChange,
+      )
+      peerConnection.addEventListener(
+        "iceconnectionstatechange",
+        this.handleIceConnectionStateChange,
       )
 
       const dataChannel = peerConnection.createDataChannel("oai-events")
@@ -86,6 +99,9 @@ export class RealtimeConversation {
                   transcription: {
                     model: session.transcription_model,
                   },
+                },
+                output: {
+                  voice: session.voice,
                 },
               },
             },
@@ -142,12 +158,20 @@ export class RealtimeConversation {
       "connectionstatechange",
       this.handleConnectionStateChange,
     )
+    peerConnection?.removeEventListener(
+    "iceconnectionstatechange",
+    this.handleIceConnectionStateChange,
+    )
     dataChannel?.close()
     peerConnection?.close()
     microphoneStream?.getTracks().forEach((track) => track.stop())
     this.remoteAudio.pause()
     this.remoteAudio.srcObject = null
     this.callbacks.onState("ended")
+  }
+
+  async enableAudio(): Promise<void> {
+    await this.playRemoteAudio()
   }
 
   private fail(error: Error): void {
@@ -158,9 +182,14 @@ export class RealtimeConversation {
 
   private readonly handleConnectionStateChange = (): void => {
     const state = this.peerConnection?.connectionState
+    console.info("[VoxFlow] WebRTC connection state:", state)
     if (state === "failed" || state === "disconnected") {
       this.fail(new Error("The realtime connection was lost. Please try again."))
     }
+  }
+
+  private readonly handleIceConnectionStateChange = (): void => {
+    console.info("[VoxFlow] WebRTC ICE state:", this.peerConnection?.iceConnectionState)
   }
 
   private readonly handleDataChannelError = (): void => {
@@ -169,6 +198,29 @@ export class RealtimeConversation {
 
   private readonly handleMessage = (event: MessageEvent): void => {
     this.handleEvent(event.data)
+  }
+
+  private async playRemoteAudio(): Promise<void> {
+    console.info("[VoxFlow] Attempting assistant audio playback.", {
+      hasStream: Boolean(this.remoteAudio.srcObject),
+      muted: this.remoteAudio.muted,
+      volume: this.remoteAudio.volume,
+    })
+    try {
+      await this.remoteAudio.play()
+    } catch (error) {
+      const playbackError = error instanceof Error
+        ? error
+        : new Error("Assistant audio playback was blocked by the browser.")
+      console.warn("[VoxFlow] Assistant audio playback failed.", {
+        name: playbackError.name,
+        message: playbackError.message,
+      })
+      this.callbacks.onAudioPlaybackError(
+        new Error("Assistant audio is blocked. Select Enable audio to start playback."),
+      )
+      throw playbackError
+    }
   }
 
   private handleEvent(rawEvent: string): void {

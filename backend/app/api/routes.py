@@ -70,6 +70,7 @@ async def realtime_session(
     return RealtimeSessionResponse(
         client_secret=session.client_secret,
         model=session.model,
+        voice=session.voice,
         transcription_model=session.transcription_model,
     )
 

@@ -710,6 +710,22 @@ audio {
   margin-left: 0;
 }
 
+.enable-audio-button {
+  margin-top: 10px;
+  padding: 8px 13px;
+  border: 1px solid #4b5963;
+  border-radius: 7px;
+  color: #f2f6fa;
+  background: #223545;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.enable-audio-button:hover,
+.enable-audio-button:focus-visible {
+  background: #2d4658;
+}
+
 @keyframes voice-wave {
   from { height: 5px; }
   to { height: 17px; }

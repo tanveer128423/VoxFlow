@@ -13,6 +13,7 @@ class RealtimeError(RuntimeError):
 class RealtimeSession:
     client_secret: str
     model: str
+    voice: str
     transcription_model: str
 
 
@@ -73,5 +74,6 @@ async def create_realtime_session(
     return RealtimeSession(
         client_secret=client_secret,
         model=settings.realtime_model,
+        voice=settings.realtime_voice,
         transcription_model=settings.realtime_transcription_model,
     )

@@ -33,6 +33,7 @@ function App() {
   const [playingTurnId, setPlayingTurnId] = useState("");
   const [realtimeState, setRealtimeState] = useState<RealtimeState>("ended");
   const [liveTranscript, setLiveTranscript] = useState("");
+  const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const realtimeRef = useRef<RealtimeConversation | null>(null);
@@ -107,6 +108,7 @@ function App() {
   const startRecording = async () => {
     if (isStarting || isTranscribing || requestInFlightRef.current || recorderRef.current) return;
     setError("");
+    setAudioPlaybackBlocked(false);
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       setError("This browser does not support microphone recording.");
       return;
@@ -198,6 +200,7 @@ function App() {
   const startRealtimeConversation = async () => {
     if (realtimeRef.current || isStarting || isRecording || isTranscribing) return;
     setError("");
+    setAudioPlaybackBlocked(false);
     if (!window.isSecureContext && window.location.hostname !== "localhost") {
       setError("Realtime microphone access requires HTTPS or localhost.");
       return;
@@ -221,6 +224,7 @@ function App() {
       liveAnswerRef.current = "";
       setLiveTranscript("");
     };
+
     const conversation = new RealtimeConversation({
       onState: (state) => {
         setRealtimeState(state);
@@ -247,6 +251,7 @@ function App() {
         commitLiveTurn("interrupted");
       },
       onError: (realtimeError) => setError(realtimeError.message),
+      onAudioPlaybackError: () => setAudioPlaybackBlocked(true),
     });
     realtimeRef.current = conversation;
     liveQuestionRef.current = "";
@@ -261,6 +266,15 @@ function App() {
           ? realtimeError.message
           : "Could not start the realtime conversation.",
       );
+    }
+  };
+
+  const enableAudio = async () => {
+    try {
+      await realtimeRef.current?.enableAudio();
+      setAudioPlaybackBlocked(false);
+    } catch {
+      setError("Audio is still blocked. Check the browser's site sound permission and try again.");
     }
   };
 
@@ -446,6 +460,11 @@ function App() {
           </div>
           {!backendOnline && backendOnline !== null && <p className="error-message backend-error" role="alert">Backend unavailable. Start the API and try again.</p>}
           {error && <p className="error-message" role="alert">{error}</p>}
+          {audioPlaybackBlocked && isLiveConversation && (
+            <button className="enable-audio-button" type="button" onClick={() => void enableAudio()}>
+              Enable audio
+            </button>
+          )}
         </section>
 
       </section>
