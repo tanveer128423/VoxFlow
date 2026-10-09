@@ -1,0 +1,409 @@
+:root {
+  color: #f4f4f4;
+  background: #000;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: #000;
+}
+
+button,
+audio {
+  font: inherit;
+}
+
+.app-shell {
+  min-height: 100vh;
+  padding: 16px;
+  background: #000;
+}
+
+.voice-app {
+  width: min(100%, 1050px);
+  min-height: calc(100vh - 32px);
+  margin: 0 auto;
+  padding: clamp(36px, 7vh, 58px) clamp(0px, 2vw, 18px) 22px;
+}
+
+.brand {
+  text-align: center;
+}
+
+.waveform {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 29px;
+  margin-bottom: 17px;
+}
+
+.waveform span {
+  width: 3px;
+  border-radius: 3px;
+  background: #f1f1f1;
+}
+
+.waveform span:nth-child(1),
+.waveform span:nth-child(7) {
+  height: 8px;
+}
+
+.waveform span:nth-child(2),
+.waveform span:nth-child(6) {
+  height: 14px;
+}
+
+.waveform span:nth-child(3),
+.waveform span:nth-child(5) {
+  height: 22px;
+}
+
+.waveform span:nth-child(4) {
+  height: 29px;
+}
+
+.brand h1 {
+  margin: 0;
+  color: #f2f2f2;
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.04em;
+}
+
+.brand p {
+  margin: 20px 0 0;
+  color: #c3c3c3;
+  font-size: 18px;
+}
+
+.history-summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 14px;
+  color: #858585;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.clear-button {
+  padding: 4px 8px;
+  border: 1px solid #292929;
+  border-radius: 6px;
+  color: #bcbcbc;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.clear-button:hover,
+.clear-button:focus-visible {
+  border-color: #555;
+  color: #fff;
+}
+
+.interaction {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  margin-top: 18px;
+  text-align: center;
+}
+
+.record-button {
+  display: grid;
+  width: 65px;
+  height: 65px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: #fff;
+  background: #2d2d2d;
+  cursor: pointer;
+  transition: background 160ms ease, transform 160ms ease;
+}
+
+.record-button:hover:not(:disabled),
+.record-button:focus-visible {
+  background: #3b3b3b;
+  transform: scale(1.04);
+}
+
+.record-button.recording {
+  background: #454545;
+}
+
+.record-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.record-button svg {
+  width: 27px;
+  height: 27px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.status-heading {
+  margin: 21px 0 0;
+  color: #f4f4f4;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+}
+
+.status-description {
+  margin: 23px 0 0;
+  color: #c5c5c5;
+  font-size: 18px;
+}
+
+.processing-note {
+  margin: 16px auto 0;
+  color: #858585;
+  font-size: 13px;
+}
+
+.error-message {
+  max-width: 620px;
+  margin: 14px auto 0;
+  color: #f0a9a9;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.backend-error {
+  margin-top: 10px;
+}
+
+.transcript-card {
+  width: min(100%, 700px);
+  margin-top: 25px;
+  padding: 15px 17px;
+  border: 1px solid #292929;
+  border-radius: 12px;
+  text-align: left;
+  background: #000;
+}
+
+.conversation-list {
+  display: flex;
+  width: min(100%, 700px);
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 25px;
+}
+
+.conversation-card {
+  padding: 17px;
+  border: 1px solid #292929;
+  border-radius: 12px;
+  text-align: left;
+  background: #000;
+}
+
+.turn-label {
+  color: #8f8f8f;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.assistant-label {
+  margin-top: 18px;
+  color: #bcbcbc;
+}
+
+.question-text,
+.answer-text {
+  margin: 7px 0 0;
+  color: #ededed;
+  line-height: 1.5;
+}
+
+.answer-text {
+  color: #f5f5f5;
+}
+
+.answer-text > :first-child {
+  margin-top: 0;
+}
+
+.answer-text > :last-child {
+  margin-bottom: 0;
+}
+
+.answer-text h1,
+.answer-text h2,
+.answer-text h3 {
+  margin: 18px 0 8px;
+  color: #fff;
+  font-size: 1.05em;
+}
+
+.answer-text p {
+  margin: 0 0 10px;
+}
+
+.answer-text ul,
+.answer-text ol {
+  margin: 8px 0 12px;
+  padding-left: 22px;
+}
+
+.answer-text li + li {
+  margin-top: 5px;
+}
+
+.answer-text code {
+  padding: 2px 5px;
+  border: 1px solid #292929;
+  border-radius: 4px;
+  color: #e6e6e6;
+  background: #111;
+  font-size: 0.9em;
+}
+
+.restored-audio {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  color: #858585;
+  font-size: 13px;
+}
+
+.message-label {
+  color: #a9a9a9;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.transcript-card p {
+  margin: 7px 0 0;
+  color: #ededed;
+  line-height: 1.5;
+}
+
+.assistant-card {
+  border-left: 1px solid #4a4a4a;
+}
+
+.audio-player {
+  width: 100%;
+  margin-top: 14px;
+}
+
+.retry-button {
+  margin-top: 2px;
+  padding: 8px 12px;
+  border: 1px solid #3a3a3a;
+  border-radius: 7px;
+  color: #ededed;
+  background: #111;
+  cursor: pointer;
+}
+
+.retry-button:hover,
+.retry-button:focus-visible {
+  background: #1c1c1c;
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 40px;
+}
+
+.feature-card {
+  min-height: 126px;
+  padding: 16px;
+  border: 1px solid #292929;
+  border-radius: 12px;
+  background: #000;
+}
+
+.feature-card svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: #f0f0f0;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.feature-card h3 {
+  margin: 10px 0 0;
+  color: #f0f0f0;
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+}
+
+.feature-card p {
+  margin: 8px 0 0;
+  color: #c3c3c3;
+  font-size: 15px;
+}
+
+.card-status {
+  display: block;
+  margin-top: 7px;
+  color: #858585;
+  font-size: 11px;
+}
+
+@media (max-width: 620px) {
+  .app-shell {
+    padding: 12px;
+  }
+
+  .voice-app {
+    min-height: calc(100vh - 24px);
+    padding-top: 32px;
+  }
+
+  .brand p,
+  .status-description {
+    font-size: 16px;
+  }
+
+  .feature-grid {
+    grid-template-columns: 1fr;
+    margin-top: 30px;
+  }
+
+  .restored-audio {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .record-button {
+    transition: none;
+  }
+}

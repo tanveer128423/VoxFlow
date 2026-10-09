@@ -1,0 +1,1 @@
+"""LitLabs voice assistant backend."""
