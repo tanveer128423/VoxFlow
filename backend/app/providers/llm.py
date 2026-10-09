@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -19,10 +18,10 @@ class MockLanguageModel:
 
 
 @dataclass
-class GeminiLanguageModel:
+class OpenAILanguageModel:
     api_key: str
     timeout_seconds: float
-    model: str = "gemini-3.8-flash"
+    model: str = "gpt-4o-mini"
     transport: httpx.AsyncBaseTransport | None = None
     max_retries: int = 2
 
@@ -30,23 +29,24 @@ class GeminiLanguageModel:
         if not self.api_key:
             raise LLMError("Language model is not configured.")
 
-        endpoint = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self.model}:generateContent"
-        )
         payload = {
-            "contents": [{"parts": [{"text": transcript}]}],
-            "systemInstruction": {
-                "parts": [
-                    {
-                        "text": (
-                            "You are a concise, helpful voice assistant. "
-                            "Answer in plain language suitable for speech."
-                        )
-                    }
-                ]
-            },
-            "generationConfig": {"maxOutputTokens": 800, "temperature": 0.4},
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a concise, helpful voice assistant. "
+                        "Answer in plain language suitable for speech."
+                    ),
+                },
+                {"role": "user", "content": transcript},
+            ],
+            "max_tokens": 800,
+            "temperature": 0.4,
+        }
+        headers = {
+            "Authorization": "Bearer " + self.api_key,
+            "Content-Type": "application/json",
         }
 
         started_at = time.perf_counter()
@@ -57,14 +57,12 @@ class GeminiLanguageModel:
             ) as client:
                 for attempt in range(self.max_retries + 1):
                     response = await client.post(
-                        endpoint,
-                        params={"key": self.api_key},
+                        "https://api.openai.com/v1/chat/completions",
+                        headers=headers,
                         json=payload,
                     )
                     if response.status_code not in (500, 502, 503, 504):
                         break
-                    if attempt < self.max_retries:
-                        await asyncio.sleep(0.5 * (attempt + 1))
         except httpx.TimeoutException as exc:
             raise LLMError("The language model timed out.") from exc
         except httpx.HTTPError as exc:
@@ -84,21 +82,19 @@ class GeminiLanguageModel:
 
         try:
             payload = response.json()
-            candidate = payload["candidates"][0]
-            parts = candidate["content"]["parts"]
-            text = "".join(
-                part["text"] for part in parts if isinstance(part, dict) and "text" in part
-            )
-            finish_reason = candidate.get("finishReason", "UNKNOWN")
-            usage = payload.get("usageMetadata", {})
+            choice = payload["choices"][0]
+            message = choice["message"]
+            text = message["content"]
+            finish_reason = choice.get("finish_reason", "unknown")
+            usage = payload.get("usage", {})
             logger.info(
                 "LLM completed: characters=%d output_tokens=%s finish_reason=%s duration_ms=%d",
                 len(text),
-                usage.get("candidatesTokenCount", "unknown"),
+                usage.get("completion_tokens", "unknown"),
                 finish_reason,
                 elapsed_ms,
             )
-            if finish_reason == "MAX_TOKENS":
+            if finish_reason == "length":
                 raise LLMError(
                     "The language model response was truncated. Please try a shorter question."
                 )

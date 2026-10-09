@@ -24,11 +24,11 @@ class MockSpeechToText:
 
 
 @dataclass
-class GroqSpeechToText:
+class OpenAISpeechToText:
     api_key: str
     timeout_seconds: float
-    model: str = "whisper-large-v3-turbo"
-    endpoint: str = "https://api.groq.com/openai/v1/audio/transcriptions"
+    model: str = "whisper-1"
+    endpoint: str = "https://api.openai.com/v1/audio/transcriptions"
     transport: httpx.AsyncBaseTransport | None = None
 
     async def transcribe(
@@ -37,7 +37,7 @@ class GroqSpeechToText:
         if not self.api_key:
             raise STTError("Speech transcription is not configured.")
 
-        headers = {"Authorization": f"Bearer {self.api_key}"}
+        headers = {"Authorization": "Bearer " + self.api_key}
         files = {"file": (filename, audio, content_type)}
         data = {"model": self.model, "response_format": "json"}
 
@@ -54,12 +54,17 @@ class GroqSpeechToText:
         except httpx.HTTPError as exc:
             raise STTError("Speech transcription provider is unavailable.") from exc
 
+        if response.status_code in (401, 403):
+            raise STTError("Speech transcription authentication failed.")
         if response.status_code == 429:
             raise STTError("Speech transcription is temporarily rate limited.")
         if response.is_error:
             raise STTError("Speech transcription failed.")
 
-        transcript = response.json().get("text")
+        try:
+            transcript = response.json()["text"]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise STTError("Speech transcription returned an invalid response.") from exc
         if not isinstance(transcript, str):
             raise STTError("Speech transcription returned an invalid response.")
         return transcript.strip()

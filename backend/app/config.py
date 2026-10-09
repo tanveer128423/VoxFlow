@@ -6,9 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_env: str = "development"
     frontend_origin: str = "http://localhost:5173"
-    groq_api_key: str = ""
-    gemini_api_key: str = ""
-    gemini_model: str = "gemini-3.8-flash"
+    openai_api_key: str = ""
     google_application_credentials: str = ""
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = ""

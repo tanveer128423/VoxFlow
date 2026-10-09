@@ -10,8 +10,8 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.config import Settings, get_settings
-from app.providers.stt import GroqSpeechToText, MockSpeechToText
-from app.providers.llm import GeminiLanguageModel, LLMError
+from app.providers.stt import MockSpeechToText, OpenAISpeechToText
+from app.providers.llm import LLMError, OpenAILanguageModel
 from app.providers.tts import (
     ElevenLabsTextToSpeech,
     MockTextToSpeech,
@@ -19,7 +19,7 @@ from app.providers.tts import (
     TTSError,
 )
 from app.services.transcription import create_stt_provider
-from app.services.voice_pipeline import create_tts_provider
+from app.services.voice_pipeline import create_llm_provider, create_tts_provider
 
 
 @pytest.fixture(autouse=True)
@@ -87,14 +87,14 @@ def test_transcribe_rejects_empty_audio() -> None:
     assert response.json() == {"detail": "The audio recording is empty."}
 
 
-def test_groq_provider_is_selected_explicitly() -> None:
-    provider = create_stt_provider(Settings(stt_provider="groq"))
+def test_openai_stt_provider_is_selected_explicitly() -> None:
+    provider = create_stt_provider(Settings(stt_provider="openai"))
 
-    assert provider.__class__.__name__ == "GroqSpeechToText"
+    assert isinstance(provider, OpenAISpeechToText)
 
 
 @pytest.mark.anyio
-async def test_groq_uses_bearer_api_key_without_real_request() -> None:
+async def test_openai_stt_uses_bearer_api_key_without_real_request() -> None:
     request_seen: httpx.Request | None = None
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -102,8 +102,8 @@ async def test_groq_uses_bearer_api_key_without_real_request() -> None:
         request_seen = request
         return httpx.Response(200, json={"text": "Transcribed audio"})
 
-    provider = GroqSpeechToText(
-        api_key="unit-test-groq-key",
+    provider = OpenAISpeechToText(
+        api_key="unit-test-openai-key",
         timeout_seconds=5,
         transport=httpx.MockTransport(handler),
     )
@@ -112,13 +112,21 @@ async def test_groq_uses_bearer_api_key_without_real_request() -> None:
         "Transcribed audio"
     )
     assert request_seen is not None
-    assert request_seen.headers["Authorization"] == "Bearer unit-test-groq-key"
+    assert request_seen.headers["Authorization"] == "Bearer unit-test-openai-key"
 
 
-def test_gemini_uses_configured_model() -> None:
-    provider = GeminiLanguageModel(api_key="test-key", timeout_seconds=5)
+def test_openai_uses_supported_models() -> None:
+    llm_provider = OpenAILanguageModel(api_key="test-key", timeout_seconds=5)
+    stt_provider = OpenAISpeechToText(api_key="test-key", timeout_seconds=5)
 
-    assert provider.model == "gemini-3.8-flash"
+    assert llm_provider.model == "gpt-4o-mini"
+    assert stt_provider.model == "whisper-1"
+    assert isinstance(
+        create_llm_provider(
+            Settings(llm_provider="openai", openai_api_key="test-key")
+        ),
+        OpenAILanguageModel,
+    )
 
 
 @pytest.mark.anyio
@@ -131,14 +139,14 @@ def test_gemini_uses_configured_model() -> None:
         (503, "temporarily unavailable"),
     ],
 )
-async def test_gemini_classifies_upstream_status_without_details(
+async def test_openai_llm_classifies_upstream_status_without_details(
     status_code: int, message: str
 ) -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         del request
         return httpx.Response(status_code, content=b"secret provider details")
 
-    provider = GeminiLanguageModel(
+    provider = OpenAILanguageModel(
         api_key="unit-test-key",
         timeout_seconds=5,
         transport=httpx.MockTransport(handler),
@@ -149,7 +157,7 @@ async def test_gemini_classifies_upstream_status_without_details(
 
 
 @pytest.mark.anyio
-async def test_gemini_retries_transient_unavailable_response() -> None:
+async def test_openai_llm_retries_transient_unavailable_response() -> None:
     attempts = 0
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -161,13 +169,19 @@ async def test_gemini_retries_transient_unavailable_response() -> None:
         return httpx.Response(
             200,
             json={
-                "candidates": [
-                    {"content": {"parts": [{"text": "Recovered response"}]}}
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Recovered response",
+                        },
+                        "finish_reason": "stop",
+                    }
                 ]
             },
         )
 
-    provider = GeminiLanguageModel(
+    provider = OpenAILanguageModel(
         api_key="unit-test-key",
         timeout_seconds=5,
         transport=httpx.MockTransport(handler),
@@ -179,31 +193,32 @@ async def test_gemini_retries_transient_unavailable_response() -> None:
 
 
 @pytest.mark.anyio
-async def test_gemini_preserves_all_response_parts_and_long_text() -> None:
+async def test_openai_llm_sends_request_and_preserves_long_text() -> None:
     long_text = " ".join(["A detailed explanation continues."] * 80)
 
     async def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
-        assert payload["generationConfig"]["maxOutputTokens"] == 800
+        assert request.url == "https://api.openai.com/v1/chat/completions"
+        assert request.headers["Authorization"] == "Bearer unit-test-key"
+        assert payload["model"] == "gpt-4o-mini"
+        assert payload["max_tokens"] == 800
         return httpx.Response(
             200,
             json={
-                "candidates": [
+                "choices": [
                     {
-                        "content": {
-                            "parts": [
-                                {"text": long_text[:500]},
-                                {"text": long_text[500:]},
-                            ]
+                        "message": {
+                            "role": "assistant",
+                            "content": long_text,
                         },
-                        "finishReason": "STOP",
+                        "finish_reason": "stop",
                     }
                 ],
-                "usageMetadata": {"candidatesTokenCount": 640},
+                "usage": {"completion_tokens": 640},
             },
         )
 
-    provider = GeminiLanguageModel(
+    provider = OpenAILanguageModel(
         api_key="unit-test-key",
         timeout_seconds=5,
         transport=httpx.MockTransport(handler),
@@ -213,23 +228,26 @@ async def test_gemini_preserves_all_response_parts_and_long_text() -> None:
 
 
 @pytest.mark.anyio
-async def test_gemini_rejects_truncated_output_explicitly() -> None:
+async def test_openai_llm_rejects_truncated_output_explicitly() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         del request
         return httpx.Response(
             200,
             json={
-                "candidates": [
+                "choices": [
                     {
-                        "content": {"parts": [{"text": "Incomplete answer"}]},
-                        "finishReason": "MAX_TOKENS",
+                        "message": {
+                            "role": "assistant",
+                            "content": "Incomplete answer",
+                        },
+                        "finish_reason": "length",
                     }
                 ],
-                "usageMetadata": {"candidatesTokenCount": 800},
+                "usage": {"completion_tokens": 800},
             },
         )
 
-    provider = GeminiLanguageModel(
+    provider = OpenAILanguageModel(
         api_key="unit-test-key",
         timeout_seconds=5,
         transport=httpx.MockTransport(handler),
@@ -611,8 +629,8 @@ def test_synthesize_route_is_the_only_operation_for_retry() -> None:
         app_env="development",
         simulate_tts_failure=True,
         simulate_tts_retry_with_mock=True,
-        stt_provider="groq",
-        llm_provider="gemini",
+        stt_provider="openai",
+        llm_provider="openai",
         tts_provider="elevenlabs",
     )
     app.dependency_overrides[get_settings] = lambda: settings

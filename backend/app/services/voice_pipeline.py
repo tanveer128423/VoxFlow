@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from fastapi import UploadFile
 
 from app.config import Settings
-from app.providers.llm import GeminiLanguageModel, MockLanguageModel
+from app.providers.llm import MockLanguageModel, OpenAILanguageModel
 from app.providers.stt import SpeechToTextProvider
 from app.providers.tts import (
     ElevenLabsTextToSpeech,
@@ -30,11 +30,10 @@ class VoiceTurnResult:
 
 
 def create_llm_provider(settings: Settings):
-    if settings.llm_provider == "gemini":
-        return GeminiLanguageModel(
-            api_key=settings.gemini_api_key,
+    if settings.llm_provider == "openai":
+        return OpenAILanguageModel(
+            api_key=settings.openai_api_key,
             timeout_seconds=settings.provider_timeout_seconds,
-            model=settings.gemini_model,
         )
     return MockLanguageModel()
 

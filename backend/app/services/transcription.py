@@ -2,8 +2,8 @@ from fastapi import UploadFile
 
 from app.config import Settings
 from app.providers.stt import (
-    GroqSpeechToText,
     MockSpeechToText,
+    OpenAISpeechToText,
     SpeechToTextProvider,
 )
 
@@ -27,9 +27,9 @@ def normalize_audio_content_type(content_type: str) -> str:
 
 
 def create_stt_provider(settings: Settings) -> SpeechToTextProvider:
-    if settings.stt_provider == "groq":
-        return GroqSpeechToText(
-            api_key=settings.groq_api_key,
+    if settings.stt_provider == "openai":
+        return OpenAISpeechToText(
+            api_key=settings.openai_api_key,
             timeout_seconds=settings.provider_timeout_seconds,
         )
     return MockSpeechToText()
