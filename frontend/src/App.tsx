@@ -87,6 +87,13 @@ const MIC_PROCESSING_FIELDS: (keyof MicProcessing)[] = [
   "autoGainControl",
 ];
 
+// Turn-based (fallback) mode is hidden from the default UI; Live is the only
+// visible conversation mode. The backend pipeline, provider adapters, and all
+// assessment features remain intact and are re-exposed by setting
+// VITE_ENABLE_TURN_BASED="true". Defaults to disabled when unset.
+const TURN_BASED_ENABLED =
+  import.meta.env.VITE_ENABLE_TURN_BASED === "true";
+
 async function checkBackend(): Promise<boolean> {
   const response = await fetch(apiUrl("/api/health"));
   if (!response.ok) throw new Error("Backend health check failed");
@@ -102,11 +109,15 @@ function App() {
     loadConversations,
   );
   const [error, setError] = useState("");
+  // Mobile-only collapse for the Performance panel (expanded by default). Has no
+  // effect on desktop: the collapse styling lives only in the mobile media query.
+  const [telemetryOpen, setTelemetryOpen] = useState(true);
   const [playingTurnId, setPlayingTurnId] = useState("");
   const [realtimeState, setRealtimeState] = useState<RealtimeState>("ended");
   const [liveTranscript, setLiveTranscript] = useState("");
   const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  const [promptConfigOpen, setPromptConfigOpen] = useState(false);
   const [agents, setAgents] = useState<Agent[]>(() => ensureAgents(loadAgents()));
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const instructionsRef = useRef("");
@@ -784,22 +795,36 @@ function App() {
         </header>
 
         <div className="main-layout">
-          <aside className="telemetry-panel" aria-label="Frontend performance">
+          <aside
+            className={`telemetry-panel${telemetryOpen ? "" : " collapsed"}`}
+            aria-label="Frontend performance"
+          >
             <div className="telemetry-heading">
               <strong>Performance</strong>
               <span>browser-observed · this session</span>
+              <button
+                type="button"
+                className="telemetry-toggle"
+                aria-expanded={telemetryOpen}
+                onClick={() => setTelemetryOpen((open) => !open)}
+              >
+                {telemetryOpen ? "Hide" : "Show"}
+              </button>
             </div>
             <div className="telemetry-summary">
-              <span><b>p50 EOU → audio</b>{formatMs(telemetrySummary.p50EouToAudioMs)}<small>proxy · end of your turn to assistant audio</small></span>
-              <span><b>p50 EOU → transcript</b>{formatMs(telemetrySummary.p50EouToTranscriptMs)}<small>proxy · live stage timings are not separable</small></span>
-              <span><b>p50 total</b>{formatMs(telemetrySummary.p50SpeechStartToDoneMs)}<small>includes your speaking time</small></span>
+              <span><b>p50 end of speech → response started</b>{formatMs(telemetrySummary.p50EouToResponseStartedMs)}<small>measured · Realtime response.created</small></span>
+              <span><b>p50 end of speech → first audio</b>{formatMs(telemetrySummary.p50EouToAudioMs)}<small>measured · first assistant audio playback</small></span>
+              <span><b>p50 response started → first text</b>{formatMs(telemetrySummary.p50ResponseStartedToTranscriptMs)}<small>measured · first transcript delta</small></span>
+              <span><b>p50 total response</b>{formatMs(telemetrySummary.p50SpeechStartToDoneMs)}<small>measured · includes your speaking time</small></span>
               <span><b>session setup</b>{formatMs(telemetry.sessionSetupMs)}<small>connect start to data channel ready</small></span>
               <span><b>errors</b>{telemetry.errorCount}<small>UI/runtime errors</small></span>
             </div>
             <p className="telemetry-note">
-              Live metrics are anchored to end-of-utterance (EOU). OpenAI Realtime
-              does not expose separate STT, LLM, and TTS timings. Per-stage
-              latency is shown on turn-based (fallback) turns below.
+              Live metrics are measured from genuine Realtime event timestamps
+              (end-of-utterance, response.created, first transcript delta) and
+              real assistant-audio playback, captured in the browser this
+              session. They are not isolated STT, LLM, or TTS stage latency, which
+              the live Realtime API does not expose.
             </p>
             {telemetry.turns.length > 0 && (
               <div className="telemetry-turns">
@@ -816,16 +841,21 @@ function App() {
           </aside>
 
           <div className="conversation-column">
-            <details className="prompt-config">
-              <summary>
+            <div className={`prompt-config${promptConfigOpen ? " open" : ""}`}>
+              <button
+                type="button"
+                className="prompt-config-summary"
+                aria-expanded={promptConfigOpen}
+                onClick={() => setPromptConfigOpen((open) => !open)}
+              >
                 Agent configuration
                 <span className="prompt-config-note">
                   {promptEditingDisabled
                     ? "Applies to the next session"
                     : `Agent: ${selectedAgent.name}`}
                 </span>
-              </summary>
-              <div className="prompt-config-body">
+              </button>
+              <div className="prompt-config-body" hidden={!promptConfigOpen}>
                 <div className="agent-bar">
                   <label className="agent-select">
                     <span>Agent</span>
@@ -1096,7 +1126,7 @@ function App() {
                   )}
                 </div>
 
-                {fallbackTtsInfo?.speedSupported && (
+                {TURN_BASED_ENABLED && fallbackTtsInfo?.speedSupported && (
                   <div className="fallback-config">
                     <div className="voice-config-head">
                       <span>Fallback TTS speed</span>
@@ -1155,11 +1185,12 @@ function App() {
                   <div className="voice-config-head">
                     <span>Playback and capture</span>
                     <small>
-                      Volume applies to live and turn-based modes. Minimum
-                      response delay applies to turn-based (fallback) mode only.
+                      {TURN_BASED_ENABLED
+                        ? "Volume applies to live and turn-based modes. Minimum response delay applies to turn-based (fallback) mode only. "
+                        : "Volume applies to live playback. "}
                       Word-gated interruption applies to live sessions.
                       Microphone settings take effect on the next
-                      session/recording.
+                      {TURN_BASED_ENABLED ? " session/recording." : " session."}
                     </small>
                   </div>
                   <label className="vad-field">
@@ -1173,27 +1204,29 @@ function App() {
                       onChange={(event) => setVolume(Number(event.target.value))}
                     />
                   </label>
-                  <label className="vad-field">
-                    <span>
-                      Minimum response delay (turn-based only):{" "}
-                      {minResponseDelayMs} ms
-                    </span>
-                    <input
-                      type="range"
-                      min={MIN_RESPONSE_DELAY_BOUNDS.min}
-                      max={MIN_RESPONSE_DELAY_BOUNDS.max}
-                      step={50}
-                      value={minResponseDelayMs}
-                      onChange={(event) =>
-                        setMinResponseDelayMs(Number(event.target.value))
-                      }
-                      disabled={promptEditingDisabled}
-                    />
-                    <small>
-                      Live mode cannot delay its unbuffered audio stream without
-                      dropping speech, so this applies to turn-based mode only.
-                    </small>
-                  </label>
+                  {TURN_BASED_ENABLED && (
+                    <label className="vad-field">
+                      <span>
+                        Minimum response delay (turn-based only):{" "}
+                        {minResponseDelayMs} ms
+                      </span>
+                      <input
+                        type="range"
+                        min={MIN_RESPONSE_DELAY_BOUNDS.min}
+                        max={MIN_RESPONSE_DELAY_BOUNDS.max}
+                        step={50}
+                        value={minResponseDelayMs}
+                        onChange={(event) =>
+                          setMinResponseDelayMs(Number(event.target.value))
+                        }
+                        disabled={promptEditingDisabled}
+                      />
+                      <small>
+                        Live mode cannot delay its unbuffered audio stream without
+                        dropping speech, so this applies to turn-based mode only.
+                      </small>
+                    </label>
+                  )}
                   <label className="vad-field">
                     <span>Words before interruption: {interruptMinWords}</span>
                     <input
@@ -1259,7 +1292,7 @@ function App() {
                   </div>
                 </div>
               </div>
-            </details>
+            </div>
             <section className="conversation-stage" aria-label="Conversation">
           <div
             className="conversation-list"
@@ -1305,7 +1338,7 @@ function App() {
                     ) : turn.ttsError ? (
                       <p className="error-message" role="alert">{turn.ttsError}</p>
                     ) : null}
-                    {turn.timings && (
+                    {TURN_BASED_ENABLED && turn.timings && (
                       <div className="turn-timings" aria-label="Turn-based stage latency">
                         <span>STT {formatMs(turn.timings.stt_ms)}</span>
                         <span>LLM {formatMs(turn.timings.llm_ms)}</span>
@@ -1366,7 +1399,7 @@ function App() {
                 End conversation
               </button>
             )}
-            {!isLiveConversation && !isRecording && (
+            {TURN_BASED_ENABLED && !isLiveConversation && !isRecording && (
               <button
                 className="fallback-button"
                 type="button"
@@ -1377,7 +1410,7 @@ function App() {
                 Turn-based mode
               </button>
             )}
-            {isRecording && (
+            {TURN_BASED_ENABLED && isRecording && (
               <button className="fallback-button" type="button" onClick={stopRecording} disabled={isProcessing}>
                 Stop recording
               </button>

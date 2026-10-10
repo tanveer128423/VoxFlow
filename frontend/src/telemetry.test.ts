@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
 
-import { p50, summarizeTurns, type TurnTelemetry } from "./telemetry"
+import {
+  p50,
+  summarizeStageTimings,
+  summarizeTurns,
+  type TurnTelemetry,
+} from "./telemetry"
 
 function turn(partial: Partial<TurnTelemetry>): TurnTelemetry {
   return {
@@ -57,9 +62,75 @@ describe("summarizeTurns", () => {
 
   it("omits metrics that were never measured", () => {
     const summary = summarizeTurns([turn({ status: "interrupted" })])
+    expect(summary.p50EouToResponseStartedMs).toBeUndefined()
+    expect(summary.p50ResponseStartedToTranscriptMs).toBeUndefined()
     expect(summary.p50EouToTranscriptMs).toBeUndefined()
     expect(summary.p50EouToAudioMs).toBeUndefined()
     expect(summary.p50SpeechStartToDoneMs).toBeUndefined()
     expect(summary.completeCount).toBe(0)
+  })
+
+  it("computes p50s for the measured Live-mode stage boundaries", () => {
+    const summary = summarizeTurns([
+      turn({
+        status: "complete",
+        eouToResponseStartedMs: 120,
+        responseStartedToTranscriptMs: 80,
+      }),
+      turn({
+        status: "interrupted",
+        eouToResponseStartedMs: 220,
+        responseStartedToTranscriptMs: 180,
+      }),
+    ])
+    // Both complete and interrupted turns contribute genuine boundary samples.
+    expect(summary.p50EouToResponseStartedMs).toBe(170)
+    expect(summary.p50ResponseStartedToTranscriptMs).toBe(130)
+  })
+})
+
+describe("summarizeStageTimings", () => {
+  it("returns no p50 values and zero samples for empty input", () => {
+    const summary = summarizeStageTimings([])
+    expect(summary.p50SttMs).toBeUndefined()
+    expect(summary.p50LlmMs).toBeUndefined()
+    expect(summary.p50TtsMs).toBeUndefined()
+    expect(summary.sampleCount).toBe(0)
+  })
+
+  it("computes p50 from actual stage timings", () => {
+    const summary = summarizeStageTimings([
+      { stt_ms: 100, llm_ms: 300, tts_ms: 200 },
+      { stt_ms: 200, llm_ms: 500, tts_ms: 400 },
+      { stt_ms: 300, llm_ms: 700, tts_ms: 600 },
+    ])
+    expect(summary.p50SttMs).toBe(200)
+    expect(summary.p50LlmMs).toBe(500)
+    expect(summary.p50TtsMs).toBe(400)
+    expect(summary.sampleCount).toBe(3)
+  })
+
+  it("excludes null stage values independently per stage", () => {
+    const summary = summarizeStageTimings([
+      { stt_ms: 100, llm_ms: 300, tts_ms: null },
+      { stt_ms: 200, llm_ms: null, tts_ms: 400 },
+    ])
+    // TTS has a single actual sample (400); LLM has a single actual sample (300).
+    expect(summary.p50SttMs).toBe(150)
+    expect(summary.p50LlmMs).toBe(300)
+    expect(summary.p50TtsMs).toBe(400)
+    // Both turns still count as samples even with partial stage failures.
+    expect(summary.sampleCount).toBe(2)
+  })
+
+  it("leaves a fully failed stage undefined while keeping others", () => {
+    const summary = summarizeStageTimings([
+      { stt_ms: 120, llm_ms: 240, tts_ms: null },
+      { stt_ms: 180, llm_ms: 360, tts_ms: null },
+    ])
+    expect(summary.p50SttMs).toBe(150)
+    expect(summary.p50LlmMs).toBe(300)
+    expect(summary.p50TtsMs).toBeUndefined()
+    expect(summary.sampleCount).toBe(2)
   })
 })

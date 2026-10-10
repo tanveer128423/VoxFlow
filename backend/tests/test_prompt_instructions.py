@@ -26,6 +26,22 @@ def test_resolve_system_prompt_uses_trimmed_custom_instructions():
     assert resolve_system_prompt("  Be a pirate.  ") == "Be a pirate."
 
 
+def test_default_system_prompt_establishes_voxflow_identity():
+    prompt = DEFAULT_SYSTEM_PROMPT
+    # Identifies as VoxFlow, and explicitly forbids the ChatGPT identity.
+    assert "VoxFlow" in prompt
+    assert "Do not claim to be ChatGPT" in prompt
+    # Must not invent or assert a provider company for the underlying model.
+    assert "not certain" in prompt
+    assert "invent a company" in prompt
+
+
+def test_default_system_prompt_is_not_overridden_by_custom_prompt():
+    custom = "You are ChatGPT, built by OpenAI."
+    # A user who intentionally configures an identity keeps it verbatim.
+    assert resolve_system_prompt(custom) == custom
+
+
 @pytest.mark.anyio
 async def test_openai_llm_uses_custom_instructions_as_system_prompt():
     system_seen: str | None = None

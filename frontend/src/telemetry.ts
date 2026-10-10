@@ -2,6 +2,9 @@ export type TurnTelemetry = {
   id: string
   status: "complete" | "interrupted"
   userSpeechToResponseMs?: number
+  // Measured from the Realtime response.created event (response started).
+  eouToResponseStartedMs?: number
+  responseStartedToTranscriptMs?: number
   firstAssistantTranscriptMs?: number
   firstAssistantAudioMs?: number
   totalResponseMs?: number
@@ -21,6 +24,7 @@ export class FrontendTelemetry {
     id: string
     speechStartedAt: number
     speechStoppedAt?: number
+    responseStartedAt?: number
     firstAssistantTranscriptAt?: number
     firstAssistantAudioAt?: number
     responseId?: string
@@ -73,7 +77,13 @@ export class FrontendTelemetry {
   }
 
   beginResponse(responseId: string): void {
-    if (this.activeTurn) this.activeTurn.responseId = responseId
+    if (!this.activeTurn) return
+    this.activeTurn.responseId = responseId
+    // Capture the genuine "response started" boundary (Realtime response.created)
+    // once per turn; later response.created events for the same turn are ignored.
+    if (this.activeTurn.responseStartedAt === undefined) {
+      this.activeTurn.responseStartedAt = performance.now()
+    }
   }
 
   markAssistantAudio(responseId: string): void {
@@ -95,6 +105,7 @@ export class FrontendTelemetry {
     const {
       speechStartedAt,
       speechStoppedAt,
+      responseStartedAt,
       firstAssistantTranscriptAt,
       firstAssistantAudioAt,
     } = this.activeTurn
@@ -102,6 +113,16 @@ export class FrontendTelemetry {
       id: this.activeTurn.id,
       status,
       userSpeechToResponseMs: Math.max(0, finishedAt - speechStartedAt),
+      ...(speechStoppedAt !== undefined &&
+        responseStartedAt !== undefined &&
+        responseStartedAt >= speechStoppedAt && {
+        eouToResponseStartedMs: Math.max(0, responseStartedAt - speechStoppedAt),
+      }),
+      ...(responseStartedAt !== undefined &&
+        firstAssistantTranscriptAt !== undefined &&
+        firstAssistantTranscriptAt >= responseStartedAt && {
+        responseStartedToTranscriptMs: Math.max(0, firstAssistantTranscriptAt - responseStartedAt),
+      }),
       ...(speechStoppedAt !== undefined &&
         firstAssistantTranscriptAt !== undefined &&
         firstAssistantTranscriptAt >= speechStoppedAt && {
@@ -151,9 +172,12 @@ export function p50(values: number[]): number | undefined {
 }
 
 export type TelemetrySummary = {
-  // EOU = end of user utterance (server VAD speech_stopped).
-  // These are proxies: the live Realtime path does not expose independent
-  // STT / LLM / TTS stage timings.
+  // EOU = end of user utterance (server VAD speech_stopped). All values below
+  // are measured from genuine Realtime event timestamps and real audio playback
+  // boundaries captured locally; they are not isolated STT / LLM / TTS stage
+  // timings (the live Realtime path does not expose those).
+  p50EouToResponseStartedMs?: number
+  p50ResponseStartedToTranscriptMs?: number
   p50EouToTranscriptMs?: number
   p50EouToAudioMs?: number
   // Includes the user's own speaking time (measured from speech start).
@@ -171,9 +195,45 @@ function collect(
   })
 }
 
+// Actual, backend-measured per-stage latency from turn-based (fallback) turns.
+// The live Realtime API does not expose separable STT/LLM/TTS timings, so these
+// are populated only from real turn-based samples and are never fabricated from
+// totals or proxies.
+export type StageTimingSample = {
+  stt_ms: number | null
+  llm_ms: number | null
+  tts_ms: number | null
+}
+
+export type StageLatencySummary = {
+  p50SttMs?: number
+  p50LlmMs?: number
+  p50TtsMs?: number
+  // Number of turn-based turns that contributed any stage timing.
+  sampleCount: number
+}
+
+export function summarizeStageTimings(
+  samples: StageTimingSample[],
+): StageLatencySummary {
+  const stt = samples.flatMap((s) => (s.stt_ms === null ? [] : [s.stt_ms]))
+  const llm = samples.flatMap((s) => (s.llm_ms === null ? [] : [s.llm_ms]))
+  const tts = samples.flatMap((s) => (s.tts_ms === null ? [] : [s.tts_ms]))
+  return {
+    p50SttMs: p50(stt),
+    p50LlmMs: p50(llm),
+    p50TtsMs: p50(tts),
+    sampleCount: samples.length,
+  }
+}
+
 export function summarizeTurns(turns: TurnTelemetry[]): TelemetrySummary {
   const completeTurns = turns.filter((turn) => turn.status === "complete")
   return {
+    p50EouToResponseStartedMs: p50(collect(turns, (t) => t.eouToResponseStartedMs)),
+    p50ResponseStartedToTranscriptMs: p50(
+      collect(turns, (t) => t.responseStartedToTranscriptMs),
+    ),
     p50EouToTranscriptMs: p50(collect(turns, (t) => t.firstAssistantTranscriptMs)),
     p50EouToAudioMs: p50(collect(turns, (t) => t.firstAssistantAudioMs)),
     p50SpeechStartToDoneMs: p50(

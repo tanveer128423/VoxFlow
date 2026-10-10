@@ -428,8 +428,9 @@ audio {
   min-height: 0;
   flex: 1;
   grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
+  grid-template-rows: minmax(0, 1fr);
   gap: clamp(18px, 3vw, 36px);
-  margin-top: 18px;
+  margin-top: 12px;
 }
 
 .brand {
@@ -483,6 +484,26 @@ audio {
   color: #aaa;
   background: #050505;
   font-size: 11px;
+  /* Bound the panel to its grid row and scroll internally so the per-response
+     history is reachable instead of being clipped by .voice-app overflow. */
+  max-height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-color: #333 transparent;
+  scrollbar-width: thin;
+}
+.telemetry-panel::-webkit-scrollbar {
+  width: 8px;
+}
+.telemetry-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+.telemetry-panel::-webkit-scrollbar-thumb {
+  background: #2e2e2e;
+  border-radius: 8px;
+}
+.telemetry-panel::-webkit-scrollbar-thumb:hover {
+  background: #3d3d3d;
 }
 
 .telemetry-heading,
@@ -501,6 +522,11 @@ audio {
 .telemetry-heading span,
 .telemetry-summary small {
   color: #666;
+}
+
+/* Mobile-only Performance collapse toggle; hidden (no effect) on desktop. */
+.telemetry-toggle {
+  display: none;
 }
 
 .telemetry-summary {
@@ -577,7 +603,7 @@ audio {
   gap: 18px;
   overflow-y: auto;
   margin: 0;
-  padding: 8px 6px 48px;
+  padding: 4px 6px 20px;
   scrollbar-color: #333 transparent;
   scrollbar-width: thin;
 }
@@ -722,7 +748,7 @@ audio {
   align-items: center;
   margin: 0;
   flex: 0 0 auto;
-  padding: 12px 0 4px;
+  padding: 8px 0 4px;
   border-top: 1px solid #1c1c1c;
   background: linear-gradient(#000 15%, #000 100%);
 }
@@ -861,8 +887,39 @@ audio {
     margin-top: 14px;
   }
 
+  .conversation-column {
+    flex: 1;
+    min-height: 0;
+  }
+
   .telemetry-summary {
     align-items: flex-start;
+  }
+
+  /* Mobile: allow collapsing the Performance panel to free vertical space.
+     All metrics/history/scroll are preserved; collapsing only hides them
+     on demand. Default is expanded. Desktop is unaffected (rules are scoped
+     to this media query and the toggle is hidden outside it). */
+  .telemetry-toggle {
+    display: inline-flex;
+    margin-left: auto;
+    padding: 2px 10px;
+    border: 1px solid #2e2e2e;
+    border-radius: 999px;
+    background: #111;
+    color: #bbb;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .telemetry-panel.collapsed {
+    overflow-y: visible;
+  }
+
+  .telemetry-panel.collapsed .telemetry-summary,
+  .telemetry-panel.collapsed .telemetry-note,
+  .telemetry-panel.collapsed .telemetry-turns {
+    display: none;
   }
 
   .chat-message {
@@ -907,30 +964,88 @@ audio {
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 14px;
   padding: 0.6rem 0.9rem;
-  margin-bottom: 0.9rem;
+  margin-bottom: 0.5rem;
+  min-height: 0;
 }
-.prompt-config > summary {
+.prompt-config.open {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.prompt-config.open ~ .conversation-stage {
+  flex: 0 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.prompt-config-summary {
+  width: 100%;
   cursor: pointer;
+  font: inherit;
   font-weight: 600;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  list-style: none;
+  flex: 0 0 auto;
+  padding: 0.15rem 0;
+  border-radius: 8px;
+  transition: color 0.15s ease;
 }
-.prompt-config > summary::-webkit-details-marker {
-  display: none;
+.prompt-config-summary:hover {
+  color: #fff;
+}
+.prompt-config.open .prompt-config-summary {
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.25rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+.prompt-config-summary::after {
+  content: "\25BE";
+  font-size: 0.7rem;
+  color: rgba(148, 163, 184, 0.75);
+  margin-left: auto;
+  transition: transform 0.2s ease;
+}
+.prompt-config.open .prompt-config-summary::after {
+  transform: rotate(180deg);
 }
 .prompt-config-note {
   font-size: 0.72rem;
   font-weight: 500;
   color: rgba(148, 163, 184, 0.9);
 }
+.prompt-config-body[hidden] {
+  display: none;
+}
 .prompt-config-body {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
   margin-top: 0.75rem;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 0.4rem;
+  padding-bottom: 0.5rem;
+  scrollbar-color: #333 transparent;
+  scrollbar-width: thin;
+}
+.prompt-config-body::-webkit-scrollbar {
+  width: 8px;
+}
+.prompt-config-body::-webkit-scrollbar-thumb {
+  background: #2e2e2e;
+  border-radius: 8px;
+}
+.prompt-config-body::-webkit-scrollbar-thumb:hover {
+  background: #3d3d3d;
 }
 .prompt-field {
   display: flex;
@@ -938,6 +1053,7 @@ audio {
   gap: 0.35rem;
   font-size: 0.78rem;
 }
+.prompt-field input[type="text"],
 .prompt-field textarea,
 .prompt-variable-row input {
   width: 100%;
@@ -947,8 +1063,33 @@ audio {
   color: inherit;
   padding: 0.5rem 0.6rem;
   font: inherit;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color-scheme: dark;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.prompt-field input[type="text"] {
+  height: 2.3rem;
+}
+.prompt-field textarea {
   resize: vertical;
 }
+.prompt-field input[type="text"]::placeholder,
+.prompt-field textarea::placeholder,
+.prompt-variable-row input::placeholder {
+  color: rgba(148, 163, 184, 0.6);
+}
+.prompt-field input[type="text"]:focus,
+.prompt-field input[type="text"]:focus-visible,
+.prompt-field textarea:focus,
+.prompt-field textarea:focus-visible,
+.prompt-variable-row input:focus,
+.prompt-variable-row input:focus-visible {
+  outline: none;
+  border-color: rgba(59, 130, 246, 0.8);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+}
+.prompt-field input[type="text"]:disabled,
 .prompt-field textarea:disabled,
 .prompt-variable-row input:disabled,
 .prompt-variables-head button:disabled,
@@ -1070,6 +1211,22 @@ audio {
   color: inherit;
   padding: 0.45rem 0.55rem;
   font: inherit;
+  font-size: 0.82rem;
+  height: 2.3rem;
+  color-scheme: dark;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.voice-field select:focus,
+.voice-field select:focus-visible {
+  outline: none;
+  border-color: rgba(59, 130, 246, 0.8);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+}
+.voice-field select option,
+.agent-select select option {
+  background: #0b1120;
+  color: #f4f4f4;
 }
 .vad-controls {
   display: flex;
@@ -1142,6 +1299,17 @@ audio {
   color: inherit;
   padding: 0.45rem 0.55rem;
   font: inherit;
+  font-size: 0.82rem;
+  height: 2.3rem;
+  color-scheme: dark;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.agent-select select:focus,
+.agent-select select:focus-visible {
+  outline: none;
+  border-color: rgba(59, 130, 246, 0.8);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
 }
 .agent-actions {
   display: flex;

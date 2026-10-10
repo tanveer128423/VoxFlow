@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings, get_settings
 from app.main import app
+from app.providers.llm import DEFAULT_SYSTEM_PROMPT
 from app.schemas.voice import (
     SUPPORTED_REALTIME_VOICES,
     RealtimeSessionRequest,
@@ -78,7 +79,7 @@ async def test_realtime_session_uses_ephemeral_secret_without_exposing_standard_
 
 
 @pytest.mark.anyio
-async def test_realtime_session_defaults_preserve_current_behavior():
+async def test_realtime_session_defaults_apply_voxflow_identity():
     request_seen: httpx.Request | None = None
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -92,12 +93,14 @@ async def test_realtime_session_defaults_preserve_current_behavior():
     )
 
     assert session.voice == "marin"
-    assert session.instructions is None
+    # With no custom prompt, Live mode applies the shared default identity so
+    # the assistant never self-identifies as the underlying model (ChatGPT).
+    assert session.instructions == DEFAULT_SYSTEM_PROMPT
     assert session.turn_detection == RealtimeTurnDetection()
     assert request_seen is not None
     payload = json.loads(request_seen.content)
-    # Defaults must not send an instructions field, preserving the working flow.
-    assert "instructions" not in payload["session"]
+    assert payload["session"]["instructions"] == DEFAULT_SYSTEM_PROMPT
+    assert "VoxFlow" in payload["session"]["instructions"]
     assert payload["session"]["audio"]["output"]["voice"] == "marin"
 
 

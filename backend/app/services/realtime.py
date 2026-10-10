@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.config import Settings
+from app.providers.llm import resolve_system_prompt
 from app.schemas.voice import RealtimeSessionRequest, RealtimeTurnDetection
 
 
@@ -30,7 +31,10 @@ async def create_realtime_session(
 
     config = config or RealtimeSessionRequest()
     voice = config.validated_voice(settings.realtime_voice)
-    instructions = config.effective_instructions()
+    # Apply the shared default identity when no custom prompt is supplied so
+    # Live mode matches the turn-based fallback and never self-identifies as
+    # the underlying model (e.g. ChatGPT). A user's custom prompt is preserved.
+    instructions = resolve_system_prompt(config.effective_instructions())
     turn_detection = config.effective_turn_detection()
 
     session_payload: dict = {
