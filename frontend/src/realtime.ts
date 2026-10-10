@@ -1,4 +1,4 @@
-import { createRealtimeSession } from "./api/voiceApi"
+import { createRealtimeSession, type RealtimeSessionConfig } from "./api/voiceApi"
 
 export type RealtimeState =
   | "connecting"
@@ -40,7 +40,7 @@ export class RealtimeConversation {
     this.remoteAudio.volume = 1
   }
 
-  async connect(): Promise<void> {
+  async connect(config: RealtimeSessionConfig = {}): Promise<void> {
     if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection) {
       throw new Error("This browser does not support realtime voice conversations.")
     }
@@ -59,7 +59,7 @@ export class RealtimeConversation {
         },
         video: false,
       })
-      const session = await createRealtimeSession()
+      const session = await createRealtimeSession(config)
       const peerConnection = new RTCPeerConnection()
       this.peerConnection = peerConnection
       peerConnection.ontrack = (event) => {
@@ -96,13 +96,17 @@ export class RealtimeConversation {
             session: {
               type: "realtime",
               model: session.model,
+              ...(session.instructions
+                ? { instructions: session.instructions }
+                : {}),
               audio: {
                 input: {
                   turn_detection: {
                     type: "server_vad",
-                    threshold: 0.65,
-                    prefix_padding_ms: 300,
-                    silence_duration_ms: 600,
+                    threshold: session.turn_detection.threshold,
+                    prefix_padding_ms: session.turn_detection.prefix_padding_ms,
+                    silence_duration_ms:
+                      session.turn_detection.silence_duration_ms,
                     create_response: true,
                     interrupt_response: true,
                   },

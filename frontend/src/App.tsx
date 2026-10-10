@@ -4,8 +4,23 @@ import ReactMarkdown from "react-markdown";
 import {
   apiUrl,
   createAudioObjectUrl,
+  fetchFallbackTtsInfo,
+  fetchRealtimeVoiceOptions,
   processVoiceTurn,
+  type RealtimeTurnDetection,
 } from "./api/voiceApi";
+import {
+  clampFallbackSpeed,
+  parseFallbackTtsInfo,
+  type FallbackTtsInfo,
+} from "./fallbackConfig";
+import {
+  VAD_BOUNDS,
+  buildRealtimeConfig,
+  clampTurnDetection,
+  parseVoiceOptions,
+  type RealtimeVoiceOptions,
+} from "./realtimeConfig";
 import { RealtimeConversation, type RealtimeState } from "./realtime";
 import {
   clearSavedConversations,
@@ -14,7 +29,37 @@ import {
   saveConversations,
   type ConversationTurn,
 } from "./conversation";
-import { FrontendTelemetry, p50, type TelemetrySnapshot } from "./telemetry";
+import {
+  FrontendTelemetry,
+  summarizeTurns,
+  type TelemetrySnapshot,
+} from "./telemetry";
+import {
+  createVariableId,
+  findVariableNameIssues,
+  renderPrompt,
+  validatePromptConfig,
+  type PromptValidation,
+} from "./prompt";
+import {
+  addAgent,
+  createAgent,
+  deleteAgent,
+  duplicateAgent,
+  ensureAgents,
+  getAgentById,
+  loadAgents,
+  loadSelectedAgentId,
+  normalizeAgentName,
+  renameAgent,
+  resolveSelectedAgentId,
+  saveAgents,
+  saveSelectedAgentId,
+  updateAgentConfig,
+  updateAgentDescription,
+  type Agent,
+  type AgentConfig,
+} from "./agents";
 
 async function checkBackend(): Promise<boolean> {
   const response = await fetch(apiUrl("/api/health"));
@@ -36,6 +81,21 @@ function App() {
   const [liveTranscript, setLiveTranscript] = useState("");
   const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  const [agents, setAgents] = useState<Agent[]>(() => ensureAgents(loadAgents()));
+  const [selectedAgentId, setSelectedAgentId] = useState<string>("");
+  const instructionsRef = useRef("");
+  const promptValidationRef = useRef<PromptValidation>({
+    canStart: true,
+    errors: [],
+  });
+  const [voiceOptions, setVoiceOptions] = useState<RealtimeVoiceOptions | null>(
+    null,
+  );
+  const [voiceOptionsError, setVoiceOptionsError] = useState("");
+  const [fallbackTtsInfo, setFallbackTtsInfo] = useState<FallbackTtsInfo | null>(
+    null,
+  );
+  const fallbackSpeedRef = useRef<number | null>(null);
   const telemetryRef = useRef(new FrontendTelemetry());
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot>(
     telemetryRef.current.getSnapshot(),
@@ -56,6 +116,59 @@ function App() {
 
   useEffect(() => {
     checkBackend().then(() => setBackendOnline(true)).catch(() => setBackendOnline(false));
+  }, []);
+
+  // Keep a valid agent selected (on mount and after deletions).
+  useEffect(() => {
+    setSelectedAgentId((current) =>
+      resolveSelectedAgentId(agents, current || loadSelectedAgentId()),
+    );
+  }, [agents]);
+
+  // Debounced persistence of the full agent list (no per-agent race).
+  useEffect(() => {
+    const handle = window.setTimeout(() => saveAgents(agents), 300);
+    return () => window.clearTimeout(handle);
+  }, [agents]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchRealtimeVoiceOptions()
+      .then((payload) => {
+        if (cancelled) return;
+        const options = parseVoiceOptions(payload);
+        setVoiceOptions(options);
+        setVoiceOptionsError("");
+      })
+      .catch((optionsError) => {
+        if (cancelled) return;
+        setVoiceOptions(null);
+        setVoiceOptionsError(
+          optionsError instanceof Error
+            ? optionsError.message
+            : "Could not load the available voices.",
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchFallbackTtsInfo()
+      .then((payload) => {
+        if (cancelled) return;
+        setFallbackTtsInfo(parseFallbackTtsInfo(payload));
+      })
+      .catch(() => {
+        // Endpoint failure must not break voice sessions; simply hide the
+        // control (speed customization is treated as unavailable).
+        if (!cancelled) setFallbackTtsInfo(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => telemetryRef.current.subscribe(() => {
@@ -120,6 +233,10 @@ function App() {
 
   const startRecording = async () => {
     if (isStarting || isTranscribing || requestInFlightRef.current || recorderRef.current) return;
+    if (!promptValidationRef.current.canStart) {
+      setError(promptValidationRef.current.errors[0]);
+      return;
+    }
     setError("");
     setAudioPlaybackBlocked(false);
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
@@ -168,6 +285,8 @@ function App() {
             recorder.mimeType || mimeType || "audio/webm";
           const result = await processVoiceTurn(
             new Blob(chunksRef.current, { type: actualMimeType }),
+            instructionsRef.current || undefined,
+            fallbackSpeedRef.current ?? undefined,
           );
           if (requestGenerationRef.current !== requestGeneration) return;
           const turn: ConversationTurn = {
@@ -176,6 +295,7 @@ function App() {
             answer: result.response,
             createdAt: new Date().toISOString(),
             ttsError: result.tts_error || undefined,
+            timings: result.timings || undefined,
           };
           if (result.audio_base64 && result.audio_content_type) {
             turn.audioUrl = createAudioObjectUrl(
@@ -208,10 +328,13 @@ function App() {
       setIsStarting(false);
     }
   };
-  void startRecording;
 
   const startRealtimeConversation = async () => {
     if (realtimeRef.current || isStarting || isRecording || isTranscribing) return;
+    if (!promptValidationRef.current.canStart) {
+      setError(promptValidationRef.current.errors[0]);
+      return;
+    }
     setError("");
     setAudioPlaybackBlocked(false);
     if (!window.isSecureContext && window.location.hostname !== "localhost") {
@@ -290,8 +413,14 @@ function App() {
     liveAnswerRef.current = "";
     setLiveTranscript("");
     telemetryRef.current.startSessionSetup();
+    const sessionConfig = buildRealtimeConfig({
+      instructions: instructionsRef.current,
+      voice: selectedVoice || undefined,
+      turnDetection: turnDetection ?? undefined,
+      options: voiceOptions ?? undefined,
+    });
     try {
-      await conversation.connect();
+      await conversation.connect(sessionConfig);
     } catch (realtimeError) {
       realtimeRef.current = null;
       setError(
@@ -338,11 +467,132 @@ function App() {
     clearSavedConversations();
   };
 
-  const completedTurns = telemetry.turns.filter((turn) => turn.status === "complete");
-  const p50TotalResponse = p50(
-    completedTurns.flatMap((turn) => turn.totalResponseMs === undefined ? [] : [turn.totalResponseMs]),
-  );
-  const formatMs = (value: number | undefined) => value === undefined ? "—" : `${Math.round(value)} ms`;
+  // The selected agent is the single source of truth for prompt/voice/VAD.
+  const effectiveAgentId = selectedAgentId || agents[0]?.id || "";
+  const selectedAgent = getAgentById(agents, effectiveAgentId) ?? agents[0];
+  const promptTemplate = selectedAgent.config.promptTemplate;
+  const promptVariables = selectedAgent.config.promptVariables;
+  const selectedVoice =
+    selectedAgent.config.voice ?? voiceOptions?.defaultVoice ?? "";
+  const turnDetection =
+    selectedAgent.config.turnDetection ??
+    voiceOptions?.defaultTurnDetection ??
+    null;
+
+  const renderedPrompt = renderPrompt(promptTemplate, promptVariables);
+  instructionsRef.current = renderedPrompt.text.trim();
+  // Capture the selected agent's fallback speed for the next turn (same point
+  // and semantics as instructions). Only sent when the provider supports it.
+  const fallbackSpeed = selectedAgent.config.fallbackSpeed;
+  fallbackSpeedRef.current =
+    fallbackTtsInfo?.speedSupported && typeof fallbackSpeed === "number"
+      ? fallbackSpeed
+      : null;
+  const promptValidation = validatePromptConfig(promptTemplate, promptVariables);
+  promptValidationRef.current = promptValidation;
+  const variableIssues = findVariableNameIssues(promptVariables);
+  const promptEditingDisabled =
+    realtimeState !== "ended" || isRecording || isStarting || isTranscribing;
+
+  // Mutate the selected agent's config in place (immutably). Reading the config
+  // inside the updater avoids stale closures and per-agent write races.
+  const applyConfig = (mutate: (config: AgentConfig) => AgentConfig) =>
+    setAgents((current) => {
+      const agent = current.find((item) => item.id === effectiveAgentId);
+      if (!agent) return current;
+      return updateAgentConfig(current, effectiveAgentId, mutate(agent.config));
+    });
+
+  const setPromptTemplate = (value: string) =>
+    applyConfig((config) => ({ ...config, promptTemplate: value }));
+  const setSelectedVoice = (value: string) =>
+    applyConfig((config) => ({ ...config, voice: value }));
+  const addPromptVariable = () =>
+    applyConfig((config) => ({
+      ...config,
+      promptVariables: [
+        ...config.promptVariables,
+        { id: createVariableId(), name: "", value: "" },
+      ],
+    }));
+  const updatePromptVariable = (
+    id: string,
+    field: "name" | "value",
+    value: string,
+  ) =>
+    applyConfig((config) => ({
+      ...config,
+      promptVariables: config.promptVariables.map((variable) =>
+        variable.id === id ? { ...variable, [field]: value } : variable,
+      ),
+    }));
+  const removePromptVariable = (id: string) =>
+    applyConfig((config) => ({
+      ...config,
+      promptVariables: config.promptVariables.filter(
+        (variable) => variable.id !== id,
+      ),
+    }));
+  const setFallbackSpeed = (value: number | null) =>
+    applyConfig((config) => ({ ...config, fallbackSpeed: value }));
+  const updateTurnDetection = (
+    field: keyof RealtimeTurnDetection,
+    value: number,
+  ) =>
+    applyConfig((config) => {
+      const base =
+        config.turnDetection ??
+        voiceOptions?.defaultTurnDetection ?? {
+          threshold: 0.5,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 500,
+        };
+      return {
+        ...config,
+        turnDetection: clampTurnDetection({ ...base, [field]: value }),
+      };
+    });
+
+  // --- Agent management -----------------------------------------------------
+  const createNewAgent = () => {
+    const agent = createAgent("New agent");
+    setAgents((current) => addAgent(current, agent));
+    setSelectedAgentId(agent.id);
+  };
+  const duplicateSelectedAgent = () => {
+    const next = duplicateAgent(agents, effectiveAgentId);
+    const index = agents.findIndex((item) => item.id === effectiveAgentId);
+    const copy = next[index + 1];
+    setAgents(next);
+    if (copy) setSelectedAgentId(copy.id);
+  };
+  const deleteSelectedAgent = () => {
+    if (
+      !window.confirm(
+        `Delete agent "${selectedAgent.name}"? Conversation history is kept.`,
+      )
+    )
+      return;
+    const next = deleteAgent(agents, effectiveAgentId);
+    setAgents(next);
+    setSelectedAgentId(resolveSelectedAgentId(next, null));
+  };
+  const renameSelectedAgent = (name: string) =>
+    setAgents((current) => renameAgent(current, effectiveAgentId, name));
+  const normalizeSelectedAgentName = () =>
+    setAgents((current) => normalizeAgentName(current, effectiveAgentId));
+  const describeSelectedAgent = (description: string) =>
+    setAgents((current) =>
+      updateAgentDescription(current, effectiveAgentId, description),
+    );
+
+  useEffect(() => {
+    if (effectiveAgentId) saveSelectedAgentId(effectiveAgentId);
+  }, [effectiveAgentId]);
+
+  const telemetrySummary = summarizeTurns(telemetry.turns);
+  const formatMs = (value: number | undefined | null) =>
+    value === undefined || value === null ? "—" : `${Math.round(value)} ms`;
 
   const handleConversationScroll = () => {
     if (programmaticScrollRef.current) return;
@@ -412,18 +662,25 @@ function App() {
               <span>browser-observed · this session</span>
             </div>
             <div className="telemetry-summary">
-              <span><b>p50 total response</b>{formatMs(p50TotalResponse)}<small>last 5 complete turns · speech start to response done</small></span>
-              <span><b>session setup</b>{formatMs(telemetry.sessionSetupMs)}<small>connect start to configured data channel ready</small></span>
+              <span><b>p50 EOU → audio</b>{formatMs(telemetrySummary.p50EouToAudioMs)}<small>proxy · end of your turn to assistant audio</small></span>
+              <span><b>p50 EOU → transcript</b>{formatMs(telemetrySummary.p50EouToTranscriptMs)}<small>proxy · live stage timings are not separable</small></span>
+              <span><b>p50 total</b>{formatMs(telemetrySummary.p50SpeechStartToDoneMs)}<small>includes your speaking time</small></span>
+              <span><b>session setup</b>{formatMs(telemetry.sessionSetupMs)}<small>connect start to data channel ready</small></span>
               <span><b>errors</b>{telemetry.errorCount}<small>UI/runtime errors</small></span>
             </div>
+            <p className="telemetry-note">
+              Live metrics are anchored to end-of-utterance (EOU). OpenAI Realtime
+              does not expose separate STT, LLM, and TTS timings. Per-stage
+              latency is shown on turn-based (fallback) turns below.
+            </p>
             {telemetry.turns.length > 0 && (
               <div className="telemetry-turns">
                 {telemetry.turns.slice().reverse().map((turn) => (
                   <div key={turn.id}>
                     <span>{turn.status === "complete" ? "Complete" : "Interrupted"}</span>
-                    <span>transcript latency {formatMs(turn.firstAssistantTranscriptMs)}</span>
-                    <span>audio latency {formatMs(turn.firstAssistantAudioMs)}</span>
-                    <span>total response {formatMs(turn.totalResponseMs)}</span>
+                    <span>EOU → transcript {formatMs(turn.firstAssistantTranscriptMs)}</span>
+                    <span>EOU → audio {formatMs(turn.firstAssistantAudioMs)}</span>
+                    <span>total (incl. speech) {formatMs(turn.totalResponseMs)}</span>
                   </div>
                 ))}
               </div>
@@ -431,6 +688,326 @@ function App() {
           </aside>
 
           <div className="conversation-column">
+            <details className="prompt-config">
+              <summary>
+                Agent configuration
+                <span className="prompt-config-note">
+                  {promptEditingDisabled
+                    ? "Applies to the next session"
+                    : `Agent: ${selectedAgent.name}`}
+                </span>
+              </summary>
+              <div className="prompt-config-body">
+                <div className="agent-bar">
+                  <label className="agent-select">
+                    <span>Agent</span>
+                    <select
+                      value={effectiveAgentId}
+                      onChange={(event) => setSelectedAgentId(event.target.value)}
+                      disabled={promptEditingDisabled}
+                    >
+                      {agents.map((agent) => (
+                        <option key={agent.id} value={agent.id}>
+                          {agent.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="agent-actions">
+                    <button
+                      type="button"
+                      onClick={createNewAgent}
+                      disabled={promptEditingDisabled}
+                    >
+                      New
+                    </button>
+                    <button
+                      type="button"
+                      onClick={duplicateSelectedAgent}
+                      disabled={promptEditingDisabled}
+                    >
+                      Duplicate
+                    </button>
+                    <button
+                      type="button"
+                      onClick={deleteSelectedAgent}
+                      disabled={promptEditingDisabled}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+                <label className="prompt-field">
+                  <span>Agent name</span>
+                  <input
+                    type="text"
+                    value={selectedAgent.name}
+                    onChange={(event) => renameSelectedAgent(event.target.value)}
+                    onBlur={() => normalizeSelectedAgentName()}
+                    placeholder="Agent name"
+                    disabled={promptEditingDisabled}
+                  />
+                </label>
+                <label className="prompt-field">
+                  <span>Description</span>
+                  <input
+                    type="text"
+                    value={selectedAgent.description}
+                    onChange={(event) =>
+                      describeSelectedAgent(event.target.value)
+                    }
+                    placeholder="Optional description"
+                    disabled={promptEditingDisabled}
+                  />
+                </label>
+                <label className="prompt-field">
+                  <span>System prompt</span>
+                  <textarea
+                    value={promptTemplate}
+                    onChange={(event) => setPromptTemplate(event.target.value)}
+                    placeholder="e.g. You are {{persona}}, a helpful assistant for {{company}}."
+                    rows={4}
+                    disabled={promptEditingDisabled}
+                  />
+                </label>
+
+                <div className="prompt-variables">
+                  <div className="prompt-variables-head">
+                    <span>Variables</span>
+                    <button
+                      type="button"
+                      onClick={addPromptVariable}
+                      disabled={promptEditingDisabled}
+                    >
+                      Add variable
+                    </button>
+                  </div>
+                  {promptVariables.length === 0 && (
+                    <p className="prompt-hint">
+                      Use <code>{"{{name}}"}</code> placeholders in the prompt, then
+                      define their values here.
+                    </p>
+                  )}
+                  {promptVariables.map((variable) => (
+                    <div className="prompt-variable-row" key={variable.id}>
+                      <input
+                        type="text"
+                        value={variable.name}
+                        onChange={(event) =>
+                          updatePromptVariable(variable.id, "name", event.target.value)
+                        }
+                        placeholder="name"
+                        aria-label="Variable name"
+                        disabled={promptEditingDisabled}
+                      />
+                      <input
+                        type="text"
+                        value={variable.value}
+                        onChange={(event) =>
+                          updatePromptVariable(variable.id, "value", event.target.value)
+                        }
+                        placeholder="value"
+                        aria-label="Variable value"
+                        disabled={promptEditingDisabled}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removePromptVariable(variable.id)}
+                        disabled={promptEditingDisabled}
+                        aria-label="Remove variable"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                {(variableIssues.invalidNames.length > 0 ||
+                  variableIssues.duplicateNames.length > 0 ||
+                  renderedPrompt.invalid.length > 0 ||
+                  renderedPrompt.missing.length > 0) && (
+                  <ul className="prompt-warnings" role="alert">
+                    {variableIssues.invalidNames.map((name) => (
+                      <li key={`inv-${name}`}>Invalid variable name: {name}</li>
+                    ))}
+                    {variableIssues.duplicateNames.map((name) => (
+                      <li key={`dup-${name}`}>Duplicate variable name: {name}</li>
+                    ))}
+                    {renderedPrompt.invalid.map((name) => (
+                      <li key={`pinv-${name}`}>Invalid placeholder: {`{{${name}}}`}</li>
+                    ))}
+                    {renderedPrompt.missing.map((name) => (
+                      <li key={`miss-${name}`}>Missing value for: {name}</li>
+                    ))}
+                  </ul>
+                )}
+
+                <div className="prompt-preview">
+                  <span className="prompt-preview-label">Rendered prompt preview</span>
+                  <pre>
+                    {renderedPrompt.text.trim() ||
+                      "No custom prompt. The default assistant prompt will be used."}
+                  </pre>
+                </div>
+
+                <div className="voice-config">
+                  <div className="voice-config-head">
+                    <span>Live conversation voice</span>
+                    <small>
+                      Applies to live Realtime sessions only &mdash; it does not
+                      change the fallback text-to-speech voice.
+                    </small>
+                  </div>
+                  {voiceOptionsError ? (
+                    <p className="error-message" role="alert">
+                      {voiceOptionsError}
+                    </p>
+                  ) : !voiceOptions || !turnDetection ? (
+                    <p className="prompt-hint">Loading voice options...</p>
+                  ) : (
+                    <>
+                      <label className="voice-field">
+                        <span>Voice</span>
+                        <select
+                          value={selectedVoice}
+                          onChange={(event) =>
+                            setSelectedVoice(event.target.value)
+                          }
+                          disabled={promptEditingDisabled}
+                        >
+                          {voiceOptions.voices.map((voice) => (
+                            <option key={voice} value={voice}>
+                              {voice}
+                              {voice === voiceOptions.defaultVoice
+                                ? " (default)"
+                                : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <div className="vad-controls">
+                        <label className="vad-field">
+                          <span>
+                            Interruption threshold:{" "}
+                            {turnDetection.threshold.toFixed(2)}
+                          </span>
+                          <input
+                            type="range"
+                            min={VAD_BOUNDS.threshold.min}
+                            max={VAD_BOUNDS.threshold.max}
+                            step={0.05}
+                            value={turnDetection.threshold}
+                            onChange={(event) =>
+                              updateTurnDetection(
+                                "threshold",
+                                Number(event.target.value),
+                              )
+                            }
+                            disabled={promptEditingDisabled}
+                          />
+                        </label>
+                        <label className="vad-field">
+                          <span>
+                            Prefix padding: {turnDetection.prefix_padding_ms} ms
+                          </span>
+                          <input
+                            type="range"
+                            min={VAD_BOUNDS.prefix_padding_ms.min}
+                            max={VAD_BOUNDS.prefix_padding_ms.max}
+                            step={50}
+                            value={turnDetection.prefix_padding_ms}
+                            onChange={(event) =>
+                              updateTurnDetection(
+                                "prefix_padding_ms",
+                                Number(event.target.value),
+                              )
+                            }
+                            disabled={promptEditingDisabled}
+                          />
+                        </label>
+                        <label className="vad-field">
+                          <span>
+                            Silence duration:{" "}
+                            {turnDetection.silence_duration_ms} ms
+                          </span>
+                          <input
+                            type="range"
+                            min={VAD_BOUNDS.silence_duration_ms.min}
+                            max={VAD_BOUNDS.silence_duration_ms.max}
+                            step={50}
+                            value={turnDetection.silence_duration_ms}
+                            onChange={(event) =>
+                              updateTurnDetection(
+                                "silence_duration_ms",
+                                Number(event.target.value),
+                              )
+                            }
+                            disabled={promptEditingDisabled}
+                          />
+                        </label>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {fallbackTtsInfo?.speedSupported && (
+                  <div className="fallback-config">
+                    <div className="voice-config-head">
+                      <span>Fallback TTS speed</span>
+                      <small>
+                        Fallback TTS only &mdash; does not affect live Realtime.
+                        Provider: {fallbackTtsInfo.provider}.
+                      </small>
+                    </div>
+                    <label className="fallback-speed-toggle">
+                      <input
+                        type="checkbox"
+                        checked={fallbackSpeed !== null}
+                        onChange={(event) =>
+                          setFallbackSpeed(
+                            event.target.checked
+                              ? fallbackTtsInfo.speedDefault ??
+                                  fallbackTtsInfo.speedMin ??
+                                  1
+                              : null,
+                          )
+                        }
+                        disabled={promptEditingDisabled}
+                      />
+                      <span>Override speed</span>
+                    </label>
+                    {fallbackSpeed !== null &&
+                      fallbackTtsInfo.speedMin !== null &&
+                      fallbackTtsInfo.speedMax !== null && (
+                        <label className="vad-field">
+                          <span>
+                            Speed: {fallbackSpeed.toFixed(2)} (range{" "}
+                            {fallbackTtsInfo.speedMin}&ndash;
+                            {fallbackTtsInfo.speedMax})
+                          </span>
+                          <input
+                            type="range"
+                            min={fallbackTtsInfo.speedMin}
+                            max={fallbackTtsInfo.speedMax}
+                            step={0.05}
+                            value={fallbackSpeed}
+                            onChange={(event) =>
+                              setFallbackSpeed(
+                                clampFallbackSpeed(
+                                  Number(event.target.value),
+                                  fallbackTtsInfo,
+                                ),
+                              )
+                            }
+                            disabled={promptEditingDisabled}
+                          />
+                        </label>
+                      )}
+                  </div>
+                )}
+              </div>
+            </details>
             <section className="conversation-stage" aria-label="Conversation">
           <div
             className="conversation-list"
@@ -470,6 +1047,20 @@ function App() {
                     ) : turn.ttsError ? (
                       <p className="error-message" role="alert">{turn.ttsError}</p>
                     ) : null}
+                    {turn.timings && (
+                      <div className="turn-timings" aria-label="Turn-based stage latency">
+                        <span>STT {formatMs(turn.timings.stt_ms)}</span>
+                        <span>LLM {formatMs(turn.timings.llm_ms)}</span>
+                        <span>
+                          TTS{" "}
+                          {turn.timings.tts_ms === null
+                            ? "failed"
+                            : formatMs(turn.timings.tts_ms)}
+                        </span>
+                        <span>total {formatMs(turn.timings.total_ms)}</span>
+                        <small>wall-clock per provider call, not pure compute</small>
+                      </div>
+                    )}
                   </article>
                 )}
               </div>
@@ -508,7 +1099,7 @@ function App() {
           <div className="voice-controls">
             <button className={`record-button ${isLiveConversation ? "recording" : ""}`} type="button"
               onClick={isLiveConversation ? endRealtimeConversation : startRealtimeConversation}
-              disabled={isProcessing || isRecording}
+              disabled={isProcessing || isRecording || (!isLiveConversation && !promptValidation.canStart)}
               aria-label={isLiveConversation ? "End live conversation" : error ? "Retry live conversation" : "Start live conversation"}>
               <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="12" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3M8 21h8" /></svg>
             </button>
@@ -517,12 +1108,33 @@ function App() {
                 End conversation
               </button>
             )}
+            {!isLiveConversation && !isRecording && (
+              <button
+                className="fallback-button"
+                type="button"
+                onClick={() => void startRecording()}
+                disabled={isProcessing || !promptValidation.canStart}
+                title="Record one turn through the STT, LLM, and TTS fallback pipeline"
+              >
+                Turn-based mode
+              </button>
+            )}
             {isRecording && (
               <button className="fallback-button" type="button" onClick={stopRecording} disabled={isProcessing}>
                 Stop recording
               </button>
             )}
           </div>
+          {!isLiveConversation && !promptValidation.canStart && (
+            <div className="prompt-gate-message" role="alert">
+              <strong>Resolve the prompt configuration before starting:</strong>
+              <ul>
+                {promptValidation.errors.map((message) => (
+                  <li key={message}>{message}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           {!backendOnline && backendOnline !== null && <p className="error-message backend-error" role="alert">Backend unavailable. Start the API and try again.</p>}
           {error && <p className="error-message" role="alert">{error}</p>}
           {audioPlaybackBlocked && isLiveConversation && (

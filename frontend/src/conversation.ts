@@ -1,5 +1,12 @@
 export const CONVERSATION_STORAGE_KEY = "voxflow.conversations.v1"
 
+export type FallbackTimings = {
+  stt_ms: number | null
+  llm_ms: number | null
+  tts_ms: number | null
+  total_ms: number | null
+}
+
 export type ConversationTurn = {
   id: string
   question: string
@@ -8,6 +15,7 @@ export type ConversationTurn = {
   audioUrl?: string
   ttsError?: string
   status?: "complete" | "interrupted"
+  timings?: FallbackTimings
 }
 
 type PersistedTurn = Pick<

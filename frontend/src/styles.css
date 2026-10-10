@@ -900,3 +900,285 @@ audio {
     animation: none;
   }
 }
+
+/* Prompt configuration (M2) */
+.prompt-config {
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 14px;
+  padding: 0.6rem 0.9rem;
+  margin-bottom: 0.9rem;
+}
+.prompt-config > summary {
+  cursor: pointer;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  list-style: none;
+}
+.prompt-config > summary::-webkit-details-marker {
+  display: none;
+}
+.prompt-config-note {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: rgba(148, 163, 184, 0.9);
+}
+.prompt-config-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+.prompt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+}
+.prompt-field textarea,
+.prompt-variable-row input {
+  width: 100%;
+  background: rgba(2, 6, 23, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  color: inherit;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  resize: vertical;
+}
+.prompt-field textarea:disabled,
+.prompt-variable-row input:disabled,
+.prompt-variables-head button:disabled,
+.prompt-variable-row button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.prompt-variables {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+}
+.prompt-variables-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.prompt-variables-head button,
+.prompt-variable-row button {
+  background: rgba(59, 130, 246, 0.18);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  color: inherit;
+  border-radius: 8px;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  font: inherit;
+}
+.prompt-variable-row {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr auto;
+  gap: 0.4rem;
+  align-items: center;
+}
+.prompt-hint {
+  color: rgba(148, 163, 184, 0.85);
+  font-size: 0.74rem;
+  margin: 0;
+}
+.prompt-warnings {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: #fca5a5;
+  font-size: 0.74rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.prompt-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.prompt-preview-label {
+  font-size: 0.72rem;
+  color: rgba(148, 163, 184, 0.9);
+}
+.prompt-preview pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(2, 6, 23, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.78rem;
+}
+
+/* Prompt validation gate (M2 finalize) */
+.prompt-gate-message {
+  background: rgba(127, 29, 29, 0.35);
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  border-radius: 12px;
+  padding: 0.55rem 0.8rem;
+  color: #fecaca;
+  font-size: 0.78rem;
+  text-align: left;
+  max-width: 420px;
+}
+.prompt-gate-message ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+/* Live voice + VAD controls (M3) */
+.voice-config {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  padding-top: 0.75rem;
+}
+.voice-config-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.voice-config-head span {
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+.voice-config-head small {
+  color: rgba(148, 163, 184, 0.85);
+  font-size: 0.72rem;
+}
+.voice-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+}
+.voice-field select {
+  background: rgba(2, 6, 23, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  color: inherit;
+  padding: 0.45rem 0.55rem;
+  font: inherit;
+}
+.vad-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.vad-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.76rem;
+}
+.vad-field input[type="range"] {
+  width: 100%;
+}
+.voice-field select:disabled,
+.vad-field input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Per-stage fallback latency + telemetry note (M4) */
+.turn-timings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  margin-top: 0.5rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  font-size: 0.72rem;
+  color: rgba(148, 163, 184, 0.95);
+}
+.turn-timings span {
+  font-variant-numeric: tabular-nums;
+}
+.turn-timings small {
+  flex-basis: 100%;
+  color: rgba(148, 163, 184, 0.7);
+  font-size: 0.68rem;
+}
+.telemetry-note {
+  margin: 0.4rem 0 0;
+  font-size: 0.68rem;
+  color: rgba(148, 163, 184, 0.75);
+  line-height: 1.35;
+}
+
+/* Agent management bar (M8) */
+.agent-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+.agent-select {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+  flex: 1 1 auto;
+  min-width: 160px;
+}
+.agent-select select {
+  background: rgba(2, 6, 23, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  color: inherit;
+  padding: 0.45rem 0.55rem;
+  font: inherit;
+}
+.agent-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+.agent-actions button {
+  background: rgba(59, 130, 246, 0.18);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  color: inherit;
+  border-radius: 8px;
+  padding: 0.35rem 0.6rem;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.76rem;
+}
+.agent-select select:disabled,
+.agent-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Fallback TTS speed control (M9) */
+.fallback-config {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  padding-top: 0.75rem;
+}
+.fallback-speed-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+}
+.fallback-speed-toggle input[type="checkbox"]:disabled,
+.fallback-config input[type="range"]:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

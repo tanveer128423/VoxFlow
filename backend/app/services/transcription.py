@@ -2,6 +2,7 @@ from fastapi import UploadFile
 
 from app.config import Settings
 from app.providers.stt import (
+    DeepgramSpeechToText,
     MockSpeechToText,
     OpenAISpeechToText,
     SpeechToTextProvider,
@@ -31,6 +32,13 @@ def create_stt_provider(settings: Settings) -> SpeechToTextProvider:
         return OpenAISpeechToText(
             api_key=settings.openai_api_key,
             timeout_seconds=settings.provider_timeout_seconds,
+            model=settings.stt_model,
+        )
+    if settings.stt_provider == "deepgram":
+        return DeepgramSpeechToText(
+            api_key=settings.deepgram_api_key,
+            timeout_seconds=settings.provider_timeout_seconds,
+            model=settings.deepgram_model,
         )
     return MockSpeechToText()
 

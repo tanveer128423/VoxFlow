@@ -48,9 +48,17 @@ class MockTextToSpeech:
         return buffer.getvalue(), "audio/wav"
 
 
+def google_audio_config_kwargs(speaking_rate: float | None) -> dict:
+    """Optional AudioConfig kwargs. Empty when unset so the request is unchanged."""
+    if speaking_rate is None:
+        return {}
+    return {"speaking_rate": speaking_rate}
+
+
 @dataclass
 class GoogleTextToSpeech:
     credentials_path: str
+    speaking_rate: float | None = None
 
     async def synthesize(self, text: str) -> tuple[bytes, str]:
         if not self.credentials_path:
@@ -73,7 +81,8 @@ class GoogleTextToSpeech:
                     language_code="en-US", name="en-US-Neural2-F"
                 ),
                 audio_config=texttospeech.AudioConfig(
-                    audio_encoding=texttospeech.AudioEncoding.MP3
+                    audio_encoding=texttospeech.AudioEncoding.MP3,
+                    **google_audio_config_kwargs(self.speaking_rate),
                 ),
             )
             return response.audio_content
@@ -92,6 +101,7 @@ class ElevenLabsTextToSpeech:
     timeout_seconds: float
     transport: httpx.AsyncBaseTransport | None = None
     endpoint: str = "https://api.elevenlabs.io/v1/text-to-speech"
+    voice_settings: dict | None = None
 
     async def synthesize(self, text: str) -> tuple[bytes, str]:
         if not self.api_key or not self.voice_id:
@@ -104,7 +114,9 @@ class ElevenLabsTextToSpeech:
             "Content-Type": "application/json",
             "xi-api-key": self.api_key,
         }
-        payload = {"text": text, "model_id": self.model_id}
+        payload: dict = {"text": text, "model_id": self.model_id}
+        if self.voice_settings:
+            payload["voice_settings"] = self.voice_settings
         url = f"{self.endpoint}/{self.voice_id}"
 
         try:

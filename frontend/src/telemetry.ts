@@ -149,3 +149,36 @@ export function p50(values: number[]): number | undefined {
     ? (sorted[middle - 1] + sorted[middle]) / 2
     : sorted[middle]
 }
+
+export type TelemetrySummary = {
+  // EOU = end of user utterance (server VAD speech_stopped).
+  // These are proxies: the live Realtime path does not expose independent
+  // STT / LLM / TTS stage timings.
+  p50EouToTranscriptMs?: number
+  p50EouToAudioMs?: number
+  // Includes the user's own speaking time (measured from speech start).
+  p50SpeechStartToDoneMs?: number
+  completeCount: number
+}
+
+function collect(
+  turns: TurnTelemetry[],
+  selector: (turn: TurnTelemetry) => number | undefined,
+): number[] {
+  return turns.flatMap((turn) => {
+    const value = selector(turn)
+    return value === undefined ? [] : [value]
+  })
+}
+
+export function summarizeTurns(turns: TurnTelemetry[]): TelemetrySummary {
+  const completeTurns = turns.filter((turn) => turn.status === "complete")
+  return {
+    p50EouToTranscriptMs: p50(collect(turns, (t) => t.firstAssistantTranscriptMs)),
+    p50EouToAudioMs: p50(collect(turns, (t) => t.firstAssistantAudioMs)),
+    p50SpeechStartToDoneMs: p50(
+      collect(completeTurns, (t) => t.totalResponseMs),
+    ),
+    completeCount: completeTurns.length,
+  }
+}

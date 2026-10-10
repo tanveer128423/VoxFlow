@@ -2,11 +2,53 @@ export type TranscriptionResult = {
   transcript: string
 }
 
+export type VoiceTurnTimings = {
+  stt_ms: number | null
+  llm_ms: number | null
+  tts_ms: number | null
+  total_ms: number | null
+}
+
 export type VoiceTurnResult = TranscriptionResult & {
   response: string
   audio_base64: string | null
   audio_content_type: string | null
   tts_error: string | null
+  timings: VoiceTurnTimings | null
+}
+
+function parseTimings(value: unknown): VoiceTurnTimings | null {
+  if (value === null || value === undefined) return null
+  if (typeof value !== "object") return null
+  const isMs = (field: unknown): field is number | null =>
+    field === null || typeof field === "number"
+  const record = value as Record<string, unknown>
+  if (
+    !isMs(record.stt_ms) ||
+    !isMs(record.llm_ms) ||
+    !isMs(record.tts_ms) ||
+    !isMs(record.total_ms)
+  ) {
+    return null
+  }
+  return {
+    stt_ms: record.stt_ms as number | null,
+    llm_ms: record.llm_ms as number | null,
+    tts_ms: record.tts_ms as number | null,
+    total_ms: record.total_ms as number | null,
+  }
+}
+
+export type RealtimeTurnDetection = {
+  threshold: number
+  prefix_padding_ms: number
+  silence_duration_ms: number
+}
+
+export type RealtimeSessionConfig = {
+  voice?: string
+  instructions?: string
+  turn_detection?: RealtimeTurnDetection
 }
 
 export type RealtimeSession = {
@@ -14,6 +56,18 @@ export type RealtimeSession = {
   model: string
   voice: string
   transcription_model: string
+  instructions: string | null
+  turn_detection: RealtimeTurnDetection
+}
+
+function isTurnDetection(value: unknown): value is RealtimeTurnDetection {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as RealtimeTurnDetection).threshold === "number" &&
+    typeof (value as RealtimeTurnDetection).prefix_padding_ms === "number" &&
+    typeof (value as RealtimeTurnDetection).silence_duration_ms === "number"
+  )
 }
 
 const apiBaseUrl = (import.meta.env.VITE_API_BASE_URL ?? "").replace(/\/+$/, "")
@@ -22,9 +76,23 @@ export function apiUrl(path: string): string {
   return `${apiBaseUrl}${path}`
 }
 
-export async function createRealtimeSession(): Promise<RealtimeSession> {
+export async function fetchRealtimeVoiceOptions(): Promise<unknown> {
+  const response = await fetch(apiUrl("/api/realtime/voices"), {
+    method: "GET",
+  })
+  if (!response.ok) {
+    throw new Error("Could not load the available voices.")
+  }
+  return response.json()
+}
+
+export async function createRealtimeSession(
+  config: RealtimeSessionConfig = {},
+): Promise<RealtimeSession> {
   const response = await fetch(apiUrl("/api/realtime/session"), {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
   })
   const payload: unknown = await response.json()
   if (!response.ok) {
@@ -44,18 +112,31 @@ export async function createRealtimeSession(): Promise<RealtimeSession> {
     !("model" in payload) ||
     !("voice" in payload) ||
     !("transcription_model" in payload) ||
+    !("turn_detection" in payload) ||
     typeof payload.client_secret !== "string" ||
     typeof payload.model !== "string" ||
     typeof payload.voice !== "string" ||
-    typeof payload.transcription_model !== "string"
+    typeof payload.transcription_model !== "string" ||
+    !isTurnDetection(payload.turn_detection) ||
+    !(
+      !("instructions" in payload) ||
+      payload.instructions === null ||
+      typeof payload.instructions === "string"
+    )
   ) {
     throw new Error("The realtime session response was invalid.")
   }
+  const instructions =
+    "instructions" in payload && typeof payload.instructions === "string"
+      ? payload.instructions
+      : null
   return {
     client_secret: payload.client_secret,
     model: payload.model,
     voice: payload.voice,
     transcription_model: payload.transcription_model,
+    instructions,
+    turn_detection: payload.turn_detection,
   }
 }
 
@@ -118,9 +199,27 @@ export async function transcribeAudio(
   return { transcript: payload.transcript }
 }
 
-export async function processVoiceTurn(audio: Blob): Promise<VoiceTurnResult> {
+export async function fetchFallbackTtsInfo(): Promise<unknown> {
+  const response = await fetch(apiUrl("/api/fallback/tts"), { method: "GET" })
+  if (!response.ok) {
+    throw new Error("Could not load fallback TTS capabilities.")
+  }
+  return response.json()
+}
+
+export async function processVoiceTurn(
+  audio: Blob,
+  instructions?: string,
+  speed?: number,
+): Promise<VoiceTurnResult> {
   const formData = new FormData()
   formData.append("audio", audio, recordingFilename(audio))
+  if (instructions && instructions.trim()) {
+    formData.append("instructions", instructions)
+  }
+  if (typeof speed === "number" && Number.isFinite(speed)) {
+    formData.append("speed", String(speed))
+  }
 
   const response = await fetch(apiUrl('/api/voice-turn'), {
     method: 'POST',
@@ -161,5 +260,7 @@ export async function processVoiceTurn(audio: Blob): Promise<VoiceTurnResult> {
     audio_base64: payload.audio_base64,
     audio_content_type: payload.audio_content_type,
     tts_error: payload.tts_error,
+    timings:
+      "timings" in payload ? parseTimings(payload.timings) : null,
   }
 }

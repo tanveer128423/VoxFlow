@@ -1,10 +1,46 @@
+import json
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings, get_settings
 from app.main import app
+from app.schemas.voice import (
+    SUPPORTED_REALTIME_VOICES,
+    RealtimeSessionRequest,
+    RealtimeTurnDetection,
+)
 from app.services.realtime import RealtimeError, create_realtime_session
+
+
+def test_realtime_voices_endpoint_returns_whitelist_and_defaults():
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        realtime_voice="marin"
+    )
+
+    response = TestClient(app).get("/api/realtime/voices")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["voices"] == list(SUPPORTED_REALTIME_VOICES)
+    assert body["default_voice"] == "marin"
+    assert body["default_turn_detection"] == {
+        "threshold": 0.65,
+        "prefix_padding_ms": 300,
+        "silence_duration_ms": 600,
+    }
+
+
+def test_realtime_voices_endpoint_falls_back_to_supported_default():
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        realtime_voice="not-a-supported-voice"
+    )
+
+    response = TestClient(app).get("/api/realtime/voices")
+
+    assert response.status_code == 200
+    assert response.json()["default_voice"] == SUPPORTED_REALTIME_VOICES[0]
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +75,110 @@ async def test_realtime_session_uses_ephemeral_secret_without_exposing_standard_
     assert request_seen.url == "https://api.openai.com/v1/realtime/client_secrets"
     assert "Authorization" in request_seen.headers
     assert b"unit-test-standard-key" not in request_seen.content
+
+
+@pytest.mark.anyio
+async def test_realtime_session_defaults_preserve_current_behavior():
+    request_seen: httpx.Request | None = None
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal request_seen
+        request_seen = request
+        return httpx.Response(200, json={"value": "ek_default"})
+
+    session = await create_realtime_session(
+        Settings(openai_api_key="unit-test-key", realtime_voice="marin"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert session.voice == "marin"
+    assert session.instructions is None
+    assert session.turn_detection == RealtimeTurnDetection()
+    assert request_seen is not None
+    payload = json.loads(request_seen.content)
+    # Defaults must not send an instructions field, preserving the working flow.
+    assert "instructions" not in payload["session"]
+    assert payload["session"]["audio"]["output"]["voice"] == "marin"
+
+
+@pytest.mark.anyio
+async def test_realtime_session_applies_validated_custom_config():
+    request_seen: httpx.Request | None = None
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal request_seen
+        request_seen = request
+        return httpx.Response(200, json={"value": "ek_custom"})
+
+    config = RealtimeSessionRequest(
+        voice="verse",
+        instructions="  You are a terse pirate assistant.  ",
+        turn_detection=RealtimeTurnDetection(
+            threshold=0.4,
+            prefix_padding_ms=150,
+            silence_duration_ms=900,
+        ),
+    )
+
+    session = await create_realtime_session(
+        Settings(openai_api_key="unit-test-key", realtime_voice="marin"),
+        config,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert session.voice == "verse"
+    assert session.instructions == "You are a terse pirate assistant."
+    assert session.turn_detection.threshold == 0.4
+    assert session.turn_detection.silence_duration_ms == 900
+    assert request_seen is not None
+    payload = json.loads(request_seen.content)
+    assert payload["session"]["audio"]["output"]["voice"] == "verse"
+    assert payload["session"]["instructions"] == "You are a terse pirate assistant."
+
+
+def test_realtime_session_route_rejects_unsupported_voice():
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        openai_api_key="unit-test-key"
+    )
+
+    response = TestClient(app).post(
+        "/api/realtime/session", json={"voice": "not-a-real-voice"}
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "turn_detection",
+    [
+        {"threshold": 1.5},
+        {"threshold": -0.1},
+        {"prefix_padding_ms": -1},
+        {"silence_duration_ms": 99999},
+    ],
+)
+def test_realtime_session_route_rejects_out_of_range_vad(turn_detection):
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        openai_api_key="unit-test-key"
+    )
+
+    response = TestClient(app).post(
+        "/api/realtime/session", json={"turn_detection": turn_detection}
+    )
+
+    assert response.status_code == 422
+
+
+def test_realtime_session_route_rejects_unknown_fields():
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        openai_api_key="unit-test-key"
+    )
+
+    response = TestClient(app).post(
+        "/api/realtime/session", json={"model": "attacker-chosen-model"}
+    )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.anyio

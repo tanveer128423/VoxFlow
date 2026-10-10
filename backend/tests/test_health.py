@@ -604,8 +604,10 @@ def test_voice_turn_returns_stage_specific_llm_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class TimeoutLanguageModel:
-        async def generate(self, transcript: str) -> str:
-            del transcript
+        async def generate(
+            self, transcript: str, instructions: str | None = None
+        ) -> str:
+            del transcript, instructions
             raise LLMError("The language model timed out.")
 
     from app.services import voice_pipeline
@@ -646,3 +648,47 @@ def test_synthesize_route_is_the_only_operation_for_retry() -> None:
     assert response.status_code == 200
     assert response.json()["audio_content_type"] == "audio/wav"
     assert response.json()["audio_base64"]
+
+
+def test_voice_turn_returns_stage_timings() -> None:
+    response = TestClient(app).post(
+        "/api/voice-turn",
+        files={"audio": ("recording.webm", b"fake audio", "audio/webm")},
+    )
+
+    assert response.status_code == 200
+    timings = response.json()["timings"]
+    assert timings is not None
+    for key in ("stt_ms", "llm_ms", "tts_ms", "total_ms"):
+        assert isinstance(timings[key], int)
+        assert timings[key] >= 0
+
+
+def test_voice_turn_tts_failure_returns_partial_timings() -> None:
+    settings = Settings(
+        app_env="development",
+        simulate_tts_failure=True,
+        stt_provider="mock",
+        llm_provider="mock",
+        tts_provider="elevenlabs",
+    )
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    try:
+        response = TestClient(app).post(
+            "/api/voice-turn",
+            files={"audio": ("recording.webm", b"fake audio", "audio/webm")},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    # Text is preserved and tts_ms is null, with the measured stages reported.
+    assert body["response"].startswith("I heard:")
+    assert body["audio_base64"] is None
+    timings = body["timings"]
+    assert timings["tts_ms"] is None
+    assert isinstance(timings["stt_ms"], int)
+    assert isinstance(timings["llm_ms"], int)
+    assert isinstance(timings["total_ms"], int)

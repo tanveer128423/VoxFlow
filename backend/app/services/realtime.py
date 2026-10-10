@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import httpx
 
 from app.config import Settings
+from app.schemas.voice import RealtimeSessionRequest, RealtimeTurnDetection
 
 
 class RealtimeError(RuntimeError):
@@ -15,24 +16,33 @@ class RealtimeSession:
     model: str
     voice: str
     transcription_model: str
+    instructions: str | None
+    turn_detection: RealtimeTurnDetection
 
 
 async def create_realtime_session(
     settings: Settings,
+    config: RealtimeSessionRequest | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> RealtimeSession:
     if not settings.openai_api_key:
         raise RealtimeError("Realtime voice is not configured.")
 
-    payload = {
-        "session": {
-            "type": "realtime",
-            "model": settings.realtime_model,
-            "audio": {
-                "output": {"voice": settings.realtime_voice},
-            },
-        }
+    config = config or RealtimeSessionRequest()
+    voice = config.validated_voice(settings.realtime_voice)
+    instructions = config.effective_instructions()
+    turn_detection = config.effective_turn_detection()
+
+    session_payload: dict = {
+        "type": "realtime",
+        "model": settings.realtime_model,
+        "audio": {
+            "output": {"voice": voice},
+        },
     }
+    if instructions is not None:
+        session_payload["instructions"] = instructions
+    payload = {"session": session_payload}
     headers = {
         "Authorization": f"Bearer {settings.openai_api_key}",
         "Content-Type": "application/json",
@@ -74,6 +84,8 @@ async def create_realtime_session(
     return RealtimeSession(
         client_secret=client_secret,
         model=settings.realtime_model,
-        voice=settings.realtime_voice,
+        voice=voice,
         transcription_model=settings.realtime_transcription_model,
+        instructions=instructions,
+        turn_detection=turn_detection,
     )

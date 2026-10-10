@@ -11,9 +11,27 @@ class LLMError(RuntimeError):
     """Raised when the language model cannot produce a response."""
 
 
+DEFAULT_SYSTEM_PROMPT = (
+    "You are a concise, helpful voice assistant. "
+    "Answer in plain language suitable for speech."
+)
+
+
+def resolve_system_prompt(instructions: str | None) -> str:
+    """Use caller-supplied instructions when present, else the default prompt."""
+    if instructions is not None:
+        trimmed = instructions.strip()
+        if trimmed:
+            return trimmed
+    return DEFAULT_SYSTEM_PROMPT
+
+
 @dataclass
 class MockLanguageModel:
-    async def generate(self, transcript: str) -> str:
+    async def generate(
+        self, transcript: str, instructions: str | None = None
+    ) -> str:
+        del instructions
         return f"I heard: {transcript}"
 
 
@@ -25,7 +43,9 @@ class OpenAILanguageModel:
     transport: httpx.AsyncBaseTransport | None = None
     max_retries: int = 2
 
-    async def generate(self, transcript: str) -> str:
+    async def generate(
+        self, transcript: str, instructions: str | None = None
+    ) -> str:
         if not self.api_key:
             raise LLMError("Language model is not configured.")
 
@@ -34,10 +54,7 @@ class OpenAILanguageModel:
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "You are a concise, helpful voice assistant. "
-                        "Answer in plain language suitable for speech."
-                    ),
+                    "content": resolve_system_prompt(instructions),
                 },
                 {"role": "user", "content": transcript},
             ],
