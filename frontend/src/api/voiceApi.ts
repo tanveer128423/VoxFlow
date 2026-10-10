@@ -207,6 +207,51 @@ export async function fetchFallbackTtsInfo(): Promise<unknown> {
   return response.json()
 }
 
+export type VoicePreviewResult = {
+  voice: string
+  audio_base64: string
+  audio_content_type: string
+}
+
+// Request a short audio sample for a Live Realtime voice. User-initiated only;
+// never call this automatically. Requires a configured backend OpenAI key.
+export async function fetchVoicePreview(
+  voice: string,
+): Promise<VoicePreviewResult> {
+  const response = await fetch(apiUrl("/api/realtime/voice-preview"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ voice }),
+  })
+  const payload: unknown = await response.json()
+  if (!response.ok) {
+    const detail =
+      typeof payload === "object" &&
+      payload !== null &&
+      "detail" in payload &&
+      typeof payload.detail === "string"
+        ? payload.detail
+        : "Voice preview is unavailable."
+    throw new Error(detail)
+  }
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    !("audio_base64" in payload) ||
+    !("audio_content_type" in payload) ||
+    typeof (payload as VoicePreviewResult).audio_base64 !== "string" ||
+    typeof (payload as VoicePreviewResult).audio_content_type !== "string"
+  ) {
+    throw new Error("The voice preview response was invalid.")
+  }
+  const typed = payload as VoicePreviewResult
+  return {
+    voice,
+    audio_base64: typed.audio_base64,
+    audio_content_type: typed.audio_content_type,
+  }
+}
+
 export async function processVoiceTurn(
   audio: Blob,
   instructions?: string,

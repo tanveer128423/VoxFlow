@@ -112,6 +112,27 @@ class RealtimeSessionResponse(BaseModel):
     turn_detection: RealtimeTurnDetection
 
 
+class VoicePreviewRequest(BaseModel):
+    """Request a short audio sample for a supported Realtime voice."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    voice: str
+
+    @field_validator("voice")
+    @classmethod
+    def _voice_must_be_supported(cls, value: str) -> str:
+        if value not in SUPPORTED_REALTIME_VOICES:
+            raise ValueError("Unsupported voice selection.")
+        return value
+
+
+class VoicePreviewResponse(BaseModel):
+    voice: str
+    audio_base64: str
+    audio_content_type: str
+
+
 class RealtimeVoiceOptionsResponse(BaseModel):
     """Supported Realtime voices and defaults, as a single source of truth."""
 

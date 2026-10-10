@@ -7,6 +7,22 @@
 import type { RealtimeTurnDetection } from "./api/voiceApi"
 import { isValidVariableName, type PromptVariable } from "./prompt"
 import { clampTurnDetection } from "./realtimeConfig"
+import {
+  DEFAULT_AMBIENCE_ENABLED,
+  DEFAULT_AMBIENCE_VOLUME,
+  DEFAULT_INTERRUPT_MIN_WORDS,
+  DEFAULT_MIC_PROCESSING,
+  DEFAULT_MIN_RESPONSE_DELAY_MS,
+  DEFAULT_VOLUME,
+  clampAmbienceVolume,
+  clampInterruptMinWords,
+  clampMinResponseDelayMs,
+  clampVolume,
+  normalizeMicProcessing,
+  type MicProcessing,
+} from "./audioConfig"
+
+export type { MicProcessing } from "./audioConfig"
 
 export const AGENTS_STORAGE_KEY = "voxflow.agents.v1"
 export const SELECTED_AGENT_STORAGE_KEY = "voxflow.selectedAgentId.v1"
@@ -26,6 +42,22 @@ export type AgentConfig = {
   // Fallback TTS speed override (provider-native value). null = use the
   // backend environment/provider default. Applies to fallback TTS only.
   fallbackSpeed: number | null
+  // Output playback volume 0.0-1.0 (Live Realtime + fallback). Default 1.0.
+  volume: number
+  // Minimum response delay in ms from end-of-utterance to first assistant
+  // audio playback (both modes). Default 0 = current behavior.
+  minResponseDelayMs: number
+  // Assistant words that must be spoken before the user may interrupt (Live
+  // Realtime only). Default 0 = always interruptible (current behavior).
+  interruptMinWords: number
+  // Browser microphone-processing constraints; applied to the next
+  // session/recording only. Defaults all enabled (current behavior).
+  micProcessing: MicProcessing
+  // Optional background ambience (office typing) mixed into the outgoing live
+  // microphone stream. Off by default; enable applies to the next session.
+  ambienceEnabled: boolean
+  // Ambience mix gain 0.0-1.0 (live-adjustable). Default 0.3.
+  ambienceVolume: number
 }
 
 export type Agent = {
@@ -54,6 +86,12 @@ export function defaultAgentConfig(): AgentConfig {
     voice: null,
     turnDetection: null,
     fallbackSpeed: null,
+    volume: DEFAULT_VOLUME,
+    minResponseDelayMs: DEFAULT_MIN_RESPONSE_DELAY_MS,
+    interruptMinWords: DEFAULT_INTERRUPT_MIN_WORDS,
+    micProcessing: { ...DEFAULT_MIC_PROCESSING },
+    ambienceEnabled: DEFAULT_AMBIENCE_ENABLED,
+    ambienceVolume: DEFAULT_AMBIENCE_VOLUME,
   }
 }
 
@@ -116,6 +154,27 @@ function parseAgentConfig(value: unknown): AgentConfig {
     turnDetection: parseTurnDetection(record.turnDetection),
     fallbackSpeed:
       typeof record.fallbackSpeed === "number" ? record.fallbackSpeed : null,
+    volume:
+      typeof record.volume === "number"
+        ? clampVolume(record.volume)
+        : DEFAULT_VOLUME,
+    minResponseDelayMs:
+      typeof record.minResponseDelayMs === "number"
+        ? clampMinResponseDelayMs(record.minResponseDelayMs)
+        : DEFAULT_MIN_RESPONSE_DELAY_MS,
+    interruptMinWords:
+      typeof record.interruptMinWords === "number"
+        ? clampInterruptMinWords(record.interruptMinWords)
+        : DEFAULT_INTERRUPT_MIN_WORDS,
+    micProcessing: normalizeMicProcessing(record.micProcessing),
+    ambienceEnabled:
+      typeof record.ambienceEnabled === "boolean"
+        ? record.ambienceEnabled
+        : DEFAULT_AMBIENCE_ENABLED,
+    ambienceVolume:
+      typeof record.ambienceVolume === "number"
+        ? clampAmbienceVolume(record.ambienceVolume)
+        : DEFAULT_AMBIENCE_VOLUME,
   }
 }
 
@@ -280,6 +339,7 @@ export function duplicateAgent(agents: Agent[], id: string): Agent[] {
       turnDetection: source.config.turnDetection
         ? { ...source.config.turnDetection }
         : null,
+      micProcessing: { ...source.config.micProcessing },
     },
     createdAt: timestamp,
     updatedAt: timestamp,

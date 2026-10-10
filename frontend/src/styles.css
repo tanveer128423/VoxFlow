@@ -1182,3 +1182,61 @@ audio {
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* Phase B: voice preview, playback/capture, and mic-processing controls */
+.voice-preview {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.voice-preview button {
+  background: rgba(2, 6, 23, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 10px;
+  color: inherit;
+  padding: 0.4rem 0.7rem;
+  font: inherit;
+  cursor: pointer;
+}
+.voice-preview button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.playback-config {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+  padding-top: 0.75rem;
+}
+.mic-processing {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+  padding: 0.5rem 0.65rem;
+  margin: 0;
+}
+.mic-processing legend {
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 0 0.3rem;
+}
+.mic-processing-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.76rem;
+}
+.mic-processing-toggle input:disabled {
+  cursor: not-allowed;
+}
+
+/* Phase B: background ambience controls */
+.ambience-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}

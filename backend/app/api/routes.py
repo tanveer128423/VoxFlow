@@ -28,6 +28,8 @@ from app.schemas.voice import (
     RealtimeTurnDetection,
     RealtimeVoiceOptionsResponse,
     TranscriptionResponse,
+    VoicePreviewRequest,
+    VoicePreviewResponse,
     VoiceTurnResponse,
 )
 from app.services.transcription import (
@@ -106,6 +108,29 @@ async def realtime_session(
         transcription_model=session.transcription_model,
         instructions=session.instructions,
         turn_detection=session.turn_detection,
+    )
+
+
+@router.post("/realtime/voice-preview", response_model=VoicePreviewResponse)
+async def realtime_voice_preview(
+    request: VoicePreviewRequest,
+    settings: Settings = Depends(get_settings),
+) -> VoicePreviewResponse:
+    from app.services.voice_preview import (
+        VoicePreviewError,
+        synthesize_voice_preview,
+    )
+
+    try:
+        audio_base64, audio_content_type = await synthesize_voice_preview(
+            settings, request.voice
+        )
+    except VoicePreviewError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return VoicePreviewResponse(
+        voice=request.voice,
+        audio_base64=audio_base64,
+        audio_content_type=audio_content_type,
     )
 
 

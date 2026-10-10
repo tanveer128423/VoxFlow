@@ -73,8 +73,10 @@ with barge-in/interruption and server-VAD tuning; a turn-based STT -> LLM -> TTS
 fallback pipeline with per-stage latency; per-session customizable prompt
 templates with frontend-editable `{{variable}}` substitution; persistent,
 customizable agents (browser localStorage); a live-conversation voice dropdown;
-an optional per-agent fallback TTS speed override; and browser-observed per-turn
-telemetry with a p50 summary. Verified by automation: the backend suite
+an optional per-agent fallback TTS speed override; per-agent output volume,
+minimum response delay, word-count interruption gating, and microphone-
+processing controls; voice preview for the Live voices; and browser-observed
+per-turn telemetry with a p50 summary. Verified by automation: the backend suite
 (`pytest tests/`), the frontend unit tests, and the frontend production build.
 See "Latency metrics and telemetry" below for how Live and fallback metrics
 differ.
@@ -287,6 +289,71 @@ confirmed working.
 
 These values must never be placed in frontend code or committed to source control.
 
+## Session controls (per agent)
+
+Each saved agent persists these controls (browser localStorage). Defaults
+preserve the original behavior exactly, so an untouched agent behaves as before.
+
+- **Output volume** (0-100%, default 100%): applies to **both** Live Realtime
+  playback and the turn-based audio players. Changing it updates live playback
+  and any mounted fallback players immediately.
+- **Minimum response delay** (0-5000 ms, default 0, **turn-based/fallback
+  only**): measured from end-of-utterance (EOU) to the assistant turn's audio.
+  It only waits the *remaining* time; a response that is already later than the
+  minimum appears immediately (no extra latency added), and a superseding turn
+  cancels a pending wait. It is intentionally **not** applied to Live Realtime:
+  the live WebRTC audio stream is unbuffered, so pausing it to add a delay would
+  drop the start of the reply rather than delay it. The UI labels and disables
+  the control accordingly.
+- **Words before interruption** (0-100, default 0, **Live only**): how many
+  assistant words must be spoken before the user may barge in. At 0 the
+  assistant is always interruptible (original behavior) and the server performs
+  the interruption; above 0 the client withholds barge-in until the threshold
+  is met and manages interruption itself. A safety timeout forces the
+  interruption only if the gate stays closed while the user **keeps** speaking,
+  so a user can never be trapped; a brief sub-threshold utterance that stops is
+  cleared and does not trigger a delayed interruption. The count comes from
+  streamed transcript deltas, which can run **ahead** of the audio actually
+  heard, so it is an approximation (whole words only). When the gate is enabled
+  the server's auto-interrupt is disabled while `create_response` stays on; the
+  client defensively finalizes a prior response if the server starts a new one
+  while the old is still active. Whether overlapping server audio can occur in
+  practice requires live verification.
+- **Microphone processing** (`echoCancellation`, `noiseSuppression`,
+  `autoGainControl`, all default on): passed into `getUserMedia`. Changes take
+  effect on the **next** session/recording (no mid-session `applyConstraints`,
+  whose support is inconsistent); the UI states this.
+- **Background ambience** (office typing, **off by default, Live only**): mixes
+  an optional looping ambience track into the **outgoing** microphone stream via
+  the Web Audio API, so the assistant hears a realistic noisy environment. This
+  is the opposite of noise suppression and unrelated to it. Enabling applies to
+  the next session; the ambience gain (0-100%, default 30%) is live-adjustable.
+  If the ambience asset cannot be loaded (fetch/decode failure or no Web Audio),
+  the conversation falls back to the raw microphone automatically. All audio
+  nodes and the audio context are disposed on disconnect. It is not applied to
+  the turn-based fallback (injecting noise there would degrade transcription).
+  See "Audio assets" for the asset and license.
+
+### Audio assets
+
+- **Background ambience:** "Keyboard Typing" by **imsogabriel_Stock** -
+  https://pixabay.com/sound-effects/technology-keyboard-typing-120457/ ,
+  bundled at `frontend/public/ambience/keyboard-typing.mp3` (MP3, ~1:23).
+  **License: Pixabay Content License** (royalty-free; **no attribution
+  required**; may not be resold/redistributed as a standalone file). Bundling it
+  inside this application is permitted under that license.
+
+- **Voice preview**: auditions the selected Live Realtime voice via a
+  backend-only `POST /api/realtime/voice-preview` call to OpenAI's speech
+  endpoint (`gpt-4o-mini-tts`), returning a short cached sample. The OpenAI key
+  stays server-side. **It is user-initiated only and makes a small paid TTS
+  call when invoked with live credentials.** Limitation: the newer Realtime
+  voices `marin` and `cedar` may not be available on the speech endpoint; the
+  backend validates the voice and fails cleanly (no wrong-voice audio) when a
+  voice is unavailable. The other voices (alloy, ash, ballad, coral, echo,
+  sage, shimmer, verse) are standard speech voices and preview faithfully.
+  Previews are cached in-process per voice so each is synthesized at most once.
+
 ## Latency metrics and telemetry
 
 Latency is reported differently for the two pipelines, because the Live Realtime
@@ -312,4 +379,20 @@ API does not expose per-stage timings:
 - The live conversation requires a browser with WebRTC, microphone support, and localhost or HTTPS.
 - Live API behavior, model availability, quotas, and pricing require a configured OpenAI account and
   are not exercised by automated tests.
+- The session controls are unit-tested locally for their pure logic (volume
+  clamping/application, minimum-delay math, word-count gating, mic-constraint
+  generation, preview request/caching). Their *audible/physical* effects
+  (actual loudness, perceived delay, interruption feel, microphone DSP, and
+  preview voice quality) require live verification with credentials and a real
+  microphone/browser.
+- Voice preview makes a small paid OpenAI TTS call only when a user clicks
+  Preview with a configured key; it is never triggered automatically and makes
+  no call in development or tests.
+- The default Live Realtime voice is `marin` (`REALTIME_VOICE`); the dropdown
+  options are the OpenAI Realtime GA voices. Background ambience (office typing)
+  is implemented for Live mode only and is **off by default**; its audible mix
+  and loop quality require live verification in a real browser.
+- Deepgram STT (accent performance) and Google TTS (naturalness) remain
+  implemented-but-unverified; no comparative quality or pricing claims are made
+  here without live evidence.
 - ElevenLabs authentication, quotas, voice access, and model availability must be verified with the assessment account.

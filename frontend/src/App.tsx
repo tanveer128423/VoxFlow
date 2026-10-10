@@ -6,9 +6,24 @@ import {
   createAudioObjectUrl,
   fetchFallbackTtsInfo,
   fetchRealtimeVoiceOptions,
+  fetchVoicePreview,
   processVoiceTurn,
   type RealtimeTurnDetection,
 } from "./api/voiceApi";
+import {
+  AMBIENCE_VOLUME_BOUNDS,
+  INTERRUPT_MIN_WORDS_BOUNDS,
+  MIN_RESPONSE_DELAY_BOUNDS,
+  VOLUME_BOUNDS,
+  applyVolume,
+  buildAudioConstraints,
+  clampAmbienceVolume,
+  clampInterruptMinWords,
+  clampMinResponseDelayMs,
+  clampVolume,
+  computePlaybackDelayMs,
+  type MicProcessing,
+} from "./audioConfig";
 import {
   clampFallbackSpeed,
   parseFallbackTtsInfo,
@@ -61,6 +76,17 @@ import {
   type AgentConfig,
 } from "./agents";
 
+const MIC_PROCESSING_LABELS: Record<keyof MicProcessing, string> = {
+  echoCancellation: "Echo cancellation",
+  noiseSuppression: "Noise suppression",
+  autoGainControl: "Auto gain control",
+};
+const MIC_PROCESSING_FIELDS: (keyof MicProcessing)[] = [
+  "echoCancellation",
+  "noiseSuppression",
+  "autoGainControl",
+];
+
 async function checkBackend(): Promise<boolean> {
   const response = await fetch(apiUrl("/api/health"));
   if (!response.ok) throw new Error("Backend health check failed");
@@ -96,6 +122,22 @@ function App() {
     null,
   );
   const fallbackSpeedRef = useRef<number | null>(null);
+  const volumeRef = useRef<number>(1);
+  const minDelayRef = useRef<number>(0);
+  const interruptWordsRef = useRef<number>(0);
+  const micProcessingRef = useRef<MicProcessing>({
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+  });
+  const ambienceEnabledRef = useRef<boolean>(false);
+  const ambienceVolumeRef = useRef<number>(0.3);
+  const fallbackAudioElsRef = useRef<Set<HTMLAudioElement>>(new Set());
+  const [voicePreviewState, setVoicePreviewState] = useState<
+    { status: "idle" | "loading" | "error"; message?: string }
+  >({ status: "idle" });
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
   const telemetryRef = useRef(new FrontendTelemetry());
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot>(
     telemetryRef.current.getSnapshot(),
@@ -248,11 +290,7 @@ function App() {
     try {
       setIsStarting(true);
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
+        audio: buildAudioConstraints(micProcessingRef.current),
         video: false,
       });
       const supportedMimeTypes = [
@@ -273,6 +311,7 @@ function App() {
         setError("Recording failed. Please try again.");
       };
       recorder.onstop = async () => {
+        const eouAt = performance.now();
         stream?.getTracks().forEach((track) => track.stop());
         recorderRef.current = null;
         if (requestInFlightRef.current) return;
@@ -289,6 +328,17 @@ function App() {
             fallbackSpeedRef.current ?? undefined,
           );
           if (requestGenerationRef.current !== requestGeneration) return;
+          // Minimum response delay (EOU -> first assistant audio). Only waits
+          // the remaining time; network latency usually already exceeds it.
+          const delay = computePlaybackDelayMs(
+            eouAt,
+            performance.now(),
+            minDelayRef.current,
+          );
+          if (delay > 0) {
+            await new Promise((resolve) => setTimeout(resolve, delay));
+            if (requestGenerationRef.current !== requestGeneration) return;
+          }
           const turn: ConversationTurn = {
             id: createConversationId(),
             question: result.transcript,
@@ -420,7 +470,13 @@ function App() {
       options: voiceOptions ?? undefined,
     });
     try {
-      await conversation.connect(sessionConfig);
+      await conversation.connect(sessionConfig, {
+        volume: volumeRef.current,
+        micProcessing: micProcessingRef.current,
+        interruptMinWords: interruptWordsRef.current,
+        ambienceEnabled: ambienceEnabledRef.current,
+        ambienceVolume: ambienceVolumeRef.current,
+      });
     } catch (realtimeError) {
       realtimeRef.current = null;
       setError(
@@ -460,6 +516,7 @@ function App() {
     requestGenerationRef.current += 1;
     audioUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     audioUrlsRef.current = [];
+    fallbackAudioElsRef.current.clear();
     setConversations([]);
     setError("");
     setPlayingTurnId("");
@@ -488,6 +545,18 @@ function App() {
     fallbackTtsInfo?.speedSupported && typeof fallbackSpeed === "number"
       ? fallbackSpeed
       : null;
+  const volume = selectedAgent.config.volume;
+  volumeRef.current = volume;
+  const minResponseDelayMs = selectedAgent.config.minResponseDelayMs;
+  minDelayRef.current = minResponseDelayMs;
+  const interruptMinWords = selectedAgent.config.interruptMinWords;
+  interruptWordsRef.current = interruptMinWords;
+  const micProcessing = selectedAgent.config.micProcessing;
+  micProcessingRef.current = micProcessing;
+  const ambienceEnabled = selectedAgent.config.ambienceEnabled;
+  ambienceEnabledRef.current = ambienceEnabled;
+  const ambienceVolume = selectedAgent.config.ambienceVolume;
+  ambienceVolumeRef.current = ambienceVolume;
   const promptValidation = validatePromptConfig(promptTemplate, promptVariables);
   promptValidationRef.current = promptValidation;
   const variableIssues = findVariableNameIssues(promptVariables);
@@ -535,6 +604,65 @@ function App() {
     }));
   const setFallbackSpeed = (value: number | null) =>
     applyConfig((config) => ({ ...config, fallbackSpeed: value }));
+  const setVolume = (value: number) => {
+    const clamped = clampVolume(value);
+    applyConfig((config) => ({ ...config, volume: clamped }));
+    // Apply immediately to live playback and any mounted fallback players so
+    // the change affects real playback configuration, not just UI state.
+    realtimeRef.current?.setVolume(clamped);
+    fallbackAudioElsRef.current.forEach((element) => {
+      if (element.isConnected) applyVolume(element, clamped);
+    });
+  };
+  const setMinResponseDelayMs = (value: number) =>
+    applyConfig((config) => ({
+      ...config,
+      minResponseDelayMs: clampMinResponseDelayMs(value),
+    }));
+  const setInterruptMinWords = (value: number) =>
+    applyConfig((config) => ({
+      ...config,
+      interruptMinWords: clampInterruptMinWords(value),
+    }));
+  const setMicProcessingFlag = (field: keyof MicProcessing, value: boolean) =>
+    applyConfig((config) => ({
+      ...config,
+      micProcessing: { ...config.micProcessing, [field]: value },
+    }));
+  const setAmbienceEnabled = (value: boolean) =>
+    applyConfig((config) => ({ ...config, ambienceEnabled: value }));
+  const setAmbienceVolume = (value: number) => {
+    const clamped = clampAmbienceVolume(value);
+    applyConfig((config) => ({ ...config, ambienceVolume: clamped }));
+    // Ambience gain is live-adjustable during an active session.
+    realtimeRef.current?.setAmbienceVolume(clamped);
+  };
+  const previewSelectedVoice = async () => {
+    if (!selectedVoice) return;
+    setVoicePreviewState({ status: "loading" });
+    try {
+      const result = await fetchVoicePreview(selectedVoice);
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+      const url = createAudioObjectUrl(
+        result.audio_base64,
+        result.audio_content_type,
+      );
+      previewUrlRef.current = url;
+      if (!previewAudioRef.current) previewAudioRef.current = new Audio();
+      previewAudioRef.current.src = url;
+      applyVolume(previewAudioRef.current, volumeRef.current);
+      await previewAudioRef.current.play();
+      setVoicePreviewState({ status: "idle" });
+    } catch (previewError) {
+      setVoicePreviewState({
+        status: "error",
+        message:
+          previewError instanceof Error
+            ? previewError.message
+            : "Voice preview is unavailable.",
+      });
+    }
+  };
   const updateTurnDetection = (
     field: keyof RealtimeTurnDetection,
     value: number,
@@ -886,6 +1014,23 @@ function App() {
                         </select>
                       </label>
 
+                      <div className="voice-preview">
+                        <button
+                          type="button"
+                          onClick={() => void previewSelectedVoice()}
+                          disabled={voicePreviewState.status === "loading"}
+                        >
+                          {voicePreviewState.status === "loading"
+                            ? "Previewing..."
+                            : "Preview voice"}
+                        </button>
+                        {voicePreviewState.status === "error" && (
+                          <span className="prompt-hint" role="alert">
+                            {voicePreviewState.message}
+                          </span>
+                        )}
+                      </div>
+
                       <div className="vad-controls">
                         <label className="vad-field">
                           <span>
@@ -1006,6 +1151,113 @@ function App() {
                       )}
                   </div>
                 )}
+                <div className="playback-config">
+                  <div className="voice-config-head">
+                    <span>Playback and capture</span>
+                    <small>
+                      Volume applies to live and turn-based modes. Minimum
+                      response delay applies to turn-based (fallback) mode only.
+                      Word-gated interruption applies to live sessions.
+                      Microphone settings take effect on the next
+                      session/recording.
+                    </small>
+                  </div>
+                  <label className="vad-field">
+                    <span>Output volume: {Math.round(volume * 100)}%</span>
+                    <input
+                      type="range"
+                      min={VOLUME_BOUNDS.min}
+                      max={VOLUME_BOUNDS.max}
+                      step={0.05}
+                      value={volume}
+                      onChange={(event) => setVolume(Number(event.target.value))}
+                    />
+                  </label>
+                  <label className="vad-field">
+                    <span>
+                      Minimum response delay (turn-based only):{" "}
+                      {minResponseDelayMs} ms
+                    </span>
+                    <input
+                      type="range"
+                      min={MIN_RESPONSE_DELAY_BOUNDS.min}
+                      max={MIN_RESPONSE_DELAY_BOUNDS.max}
+                      step={50}
+                      value={minResponseDelayMs}
+                      onChange={(event) =>
+                        setMinResponseDelayMs(Number(event.target.value))
+                      }
+                      disabled={promptEditingDisabled}
+                    />
+                    <small>
+                      Live mode cannot delay its unbuffered audio stream without
+                      dropping speech, so this applies to turn-based mode only.
+                    </small>
+                  </label>
+                  <label className="vad-field">
+                    <span>Words before interruption: {interruptMinWords}</span>
+                    <input
+                      type="range"
+                      min={INTERRUPT_MIN_WORDS_BOUNDS.min}
+                      max={INTERRUPT_MIN_WORDS_BOUNDS.max}
+                      step={1}
+                      value={interruptMinWords}
+                      onChange={(event) =>
+                        setInterruptMinWords(Number(event.target.value))
+                      }
+                      disabled={promptEditingDisabled}
+                    />
+                    <small>0 = interrupt immediately (live only)</small>
+                  </label>
+                  <fieldset className="mic-processing">
+                    <legend>Microphone processing (next session)</legend>
+                    {MIC_PROCESSING_FIELDS.map((field) => (
+                      <label key={field} className="mic-processing-toggle">
+                        <input
+                          type="checkbox"
+                          checked={micProcessing[field]}
+                          onChange={(event) =>
+                            setMicProcessingFlag(field, event.target.checked)
+                          }
+                          disabled={promptEditingDisabled}
+                        />
+                        <span>{MIC_PROCESSING_LABELS[field]}</span>
+                      </label>
+                    ))}
+                  </fieldset>
+                  <div className="ambience-controls">
+                    <label className="mic-processing-toggle">
+                      <input
+                        type="checkbox"
+                        checked={ambienceEnabled}
+                        onChange={(event) =>
+                          setAmbienceEnabled(event.target.checked)
+                        }
+                        disabled={promptEditingDisabled}
+                      />
+                      <span>
+                        Background ambience: office typing (live; next session)
+                      </span>
+                    </label>
+                    {ambienceEnabled && (
+                      <label className="vad-field">
+                        <span>
+                          Ambience volume: {Math.round(ambienceVolume * 100)}%
+                        </span>
+                        <input
+                          type="range"
+                          min={AMBIENCE_VOLUME_BOUNDS.min}
+                          max={AMBIENCE_VOLUME_BOUNDS.max}
+                          step={0.05}
+                          value={ambienceVolume}
+                          onChange={(event) =>
+                            setAmbienceVolume(Number(event.target.value))
+                          }
+                        />
+                      </label>
+                    )}
+                  </div>
+                </div>
               </div>
             </details>
             <section className="conversation-stage" aria-label="Conversation">
@@ -1040,6 +1292,12 @@ function App() {
                     {turn.audioUrl ? (
                       <audio
                         className="audio-player" controls src={turn.audioUrl}
+                        ref={(element) => {
+                          if (element) {
+                            applyVolume(element, volumeRef.current);
+                            fallbackAudioElsRef.current.add(element);
+                          }
+                        }}
                         onPlay={() => setPlayingTurnId(turn.id)}
                         onPause={() => setPlayingTurnId((current) => current === turn.id ? "" : current)}
                         onEnded={() => setPlayingTurnId((current) => current === turn.id ? "" : current)}
