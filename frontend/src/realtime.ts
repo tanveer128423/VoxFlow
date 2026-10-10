@@ -9,9 +9,14 @@ export type RealtimeState =
 type RealtimeCallbacks = {
   onState: (state: RealtimeState) => void
   onUserTranscript: (transcript: string) => void
-  onAssistantTranscript: (transcript: string) => void
-  onTurnComplete: () => void
-  onTurnInterrupted: () => void
+  onAssistantTranscript: (responseId: string, transcript: string) => void
+  onTurnComplete: (responseId: string) => void
+  onTurnInterrupted: (responseId: string) => void
+  onUserSpeechStarted: (interruptingResponse: boolean, responseId?: string) => void
+  onUserSpeechStopped: () => void
+  onAssistantResponseStarted: (responseId: string) => void
+  onAssistantAudioStarted: (responseId: string) => void
+  onSessionReady: () => void
   onError: (error: Error) => void
   onAudioPlaybackError: (error: Error) => void
 }
@@ -25,6 +30,7 @@ export class RealtimeConversation {
   private closed = true
   private responseActive = false
   private responseInterrupted = false
+  private currentResponseId: string | null = null
 
   constructor(callbacks: RealtimeCallbacks) {
     this.callbacks = callbacks
@@ -42,6 +48,7 @@ export class RealtimeConversation {
     this.closed = false
     this.responseActive = false
     this.responseInterrupted = false
+    this.currentResponseId = null
     this.callbacks.onState("connecting")
     try {
       this.microphoneStream = await navigator.mediaDevices.getUserMedia({
@@ -63,7 +70,10 @@ export class RealtimeConversation {
           readyState: event.track.readyState,
           muted: event.track.muted,
         })
-        void this.playRemoteAudio().catch(() => undefined)
+        const responseId = this.responseActive
+          ? this.currentResponseId ?? undefined
+          : undefined
+        void this.playRemoteAudio(responseId).catch(() => undefined)
       }
       this.microphoneStream.getAudioTracks().forEach((track) => {
         peerConnection.addTrack(track, this.microphoneStream as MediaStream)
@@ -108,6 +118,7 @@ export class RealtimeConversation {
           }),
         )
         this.callbacks.onState("listening")
+        this.callbacks.onSessionReady()
       })
       dataChannel.addEventListener("message", this.handleMessage)
       dataChannel.addEventListener("error", this.handleDataChannelError)
@@ -171,7 +182,10 @@ export class RealtimeConversation {
   }
 
   async enableAudio(): Promise<void> {
-    await this.playRemoteAudio()
+    const responseId = this.responseActive
+      ? this.currentResponseId ?? undefined
+      : undefined
+    await this.playRemoteAudio(responseId)
   }
 
   private fail(error: Error): void {
@@ -200,7 +214,7 @@ export class RealtimeConversation {
     this.handleEvent(event.data)
   }
 
-  private async playRemoteAudio(): Promise<void> {
+  private async playRemoteAudio(responseId?: string): Promise<void> {
     console.info("[VoxFlow] Attempting assistant audio playback.", {
       hasStream: Boolean(this.remoteAudio.srcObject),
       muted: this.remoteAudio.muted,
@@ -208,6 +222,14 @@ export class RealtimeConversation {
     })
     try {
       await this.remoteAudio.play()
+      if (
+        responseId &&
+        this.responseActive &&
+        this.currentResponseId === responseId &&
+        !this.responseInterrupted
+      ) {
+        this.callbacks.onAssistantAudioStarted(responseId)
+      }
     } catch (error) {
       const playbackError = error instanceof Error
         ? error
@@ -224,7 +246,12 @@ export class RealtimeConversation {
   }
 
   private handleEvent(rawEvent: string): void {
-    let event: { type?: string; delta?: string; transcript?: string }
+    let event: {
+      type?: string
+      delta?: string
+      transcript?: string
+      response?: { id?: string }
+    }
     try {
       event = JSON.parse(rawEvent) as typeof event
     } catch {
@@ -232,6 +259,10 @@ export class RealtimeConversation {
     }
     switch (event.type) {
       case "input_audio_buffer.speech_started":
+        const interruptingResponse = this.responseActive
+        const interruptedResponseId = interruptingResponse
+          ? this.currentResponseId ?? undefined
+          : undefined
         if (this.responseActive) {
           this.responseInterrupted = true
           this.remoteAudio.pause()
@@ -239,11 +270,21 @@ export class RealtimeConversation {
             this.dataChannel.send(JSON.stringify({ type: "response.cancel" }))
           }
         }
+        this.callbacks.onUserSpeechStarted(interruptingResponse, interruptedResponseId)
         this.callbacks.onState("listening")
         break
+      case "input_audio_buffer.speech_stopped":
+        this.callbacks.onUserSpeechStopped()
+        break
       case "response.created":
+        if (!event.response?.id) break
+        this.currentResponseId = event.response.id
         this.responseActive = true
         this.responseInterrupted = false
+        this.callbacks.onAssistantResponseStarted(this.currentResponseId)
+        if (this.remoteAudio.srcObject) {
+          void this.playRemoteAudio(this.currentResponseId).catch(() => undefined)
+        }
         this.callbacks.onState("responding")
         break
       case "conversation.item.input_audio_transcription.completed":
@@ -251,14 +292,17 @@ export class RealtimeConversation {
         break
       case "response.audio_transcript.delta":
       case "response.output_audio_transcript.delta":
-        if (event.delta) this.callbacks.onAssistantTranscript(event.delta)
+        if (event.delta && this.currentResponseId) {
+          this.callbacks.onAssistantTranscript(this.currentResponseId, event.delta)
+        }
         break
       case "response.done":
+        if (!event.response?.id || event.response.id !== this.currentResponseId) break
         this.responseActive = false
         if (this.responseInterrupted) {
-          this.callbacks.onTurnInterrupted()
+          this.callbacks.onTurnInterrupted(event.response.id)
         } else {
-          this.callbacks.onTurnComplete()
+          this.callbacks.onTurnComplete(event.response.id)
         }
         this.callbacks.onState("listening")
         break

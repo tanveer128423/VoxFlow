@@ -14,6 +14,7 @@ import {
   saveConversations,
   type ConversationTurn,
 } from "./conversation";
+import { FrontendTelemetry, p50, type TelemetrySnapshot } from "./telemetry";
 
 async function checkBackend(): Promise<boolean> {
   const response = await fetch(apiUrl("/api/health"));
@@ -35,6 +36,10 @@ function App() {
   const [liveTranscript, setLiveTranscript] = useState("");
   const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
   const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  const telemetryRef = useRef(new FrontendTelemetry());
+  const [telemetry, setTelemetry] = useState<TelemetrySnapshot>(
+    telemetryRef.current.getSnapshot(),
+  );
   const recorderRef = useRef<MediaRecorder | null>(null);
   const realtimeRef = useRef<RealtimeConversation | null>(null);
   const liveQuestionRef = useRef("");
@@ -52,6 +57,14 @@ function App() {
   useEffect(() => {
     checkBackend().then(() => setBackendOnline(true)).catch(() => setBackendOnline(false));
   }, []);
+
+  useEffect(() => telemetryRef.current.subscribe(() => {
+    setTelemetry(telemetryRef.current.getSnapshot());
+  }), []);
+
+  useEffect(() => {
+    if (error) telemetryRef.current.recordError();
+  }, [error]);
 
   useEffect(() => {
     saveConversations(conversations);
@@ -237,19 +250,38 @@ function App() {
         liveQuestionRef.current = transcript;
         setLiveTranscript(transcript);
       },
-      onAssistantTranscript: (transcript) => {
+      onUserSpeechStarted: (interruptingResponse, responseId) => {
+        if (interruptingResponse && responseId) {
+          telemetryRef.current.finishTurn(responseId, "interrupted");
+        }
+        telemetryRef.current.startTurn(interruptingResponse);
+      },
+      onUserSpeechStopped: () => {
+        telemetryRef.current.markUserSpeechStopped();
+      },
+      onAssistantResponseStarted: (responseId) => {
+      telemetryRef.current.beginResponse(responseId);
+      },
+      onAssistantTranscript: (responseId, transcript) => {
+        telemetryRef.current.markAssistantTranscript(responseId);
         scrollBehaviorRef.current = liveAnswerRef.current ? "auto" : "smooth";
         liveAnswerRef.current += transcript;
         setLiveTranscript(liveAnswerRef.current);
       },
-      onTurnComplete: () => {
+      onTurnComplete: (responseId) => {
         scrollBehaviorRef.current = "smooth";
+        telemetryRef.current.finishTurn(responseId, "complete");
         commitLiveTurn("complete");
       },
-      onTurnInterrupted: () => {
+      onTurnInterrupted: (responseId) => {
         scrollBehaviorRef.current = "smooth";
+        telemetryRef.current.finishTurn(responseId, "interrupted");
         commitLiveTurn("interrupted");
       },
+      onAssistantAudioStarted: (responseId) => {
+        telemetryRef.current.markAssistantAudio(responseId);
+      },
+      onSessionReady: () => telemetryRef.current.completeSessionSetup(),
       onError: (realtimeError) => setError(realtimeError.message),
       onAudioPlaybackError: () => setAudioPlaybackBlocked(true),
     });
@@ -257,6 +289,7 @@ function App() {
     liveQuestionRef.current = "";
     liveAnswerRef.current = "";
     setLiveTranscript("");
+    telemetryRef.current.startSessionSetup();
     try {
       await conversation.connect();
     } catch (realtimeError) {
@@ -304,6 +337,12 @@ function App() {
     setShouldAutoScroll(true);
     clearSavedConversations();
   };
+
+  const completedTurns = telemetry.turns.filter((turn) => turn.status === "complete");
+  const p50TotalResponse = p50(
+    completedTurns.flatMap((turn) => turn.totalResponseMs === undefined ? [] : [turn.totalResponseMs]),
+  );
+  const formatMs = (value: number | undefined) => value === undefined ? "—" : `${Math.round(value)} ms`;
 
   const handleConversationScroll = () => {
     if (programmaticScrollRef.current) return;
@@ -366,7 +405,33 @@ function App() {
           </div>
         </header>
 
-        <section className="conversation-stage" aria-label="Conversation">
+        <div className="main-layout">
+          <aside className="telemetry-panel" aria-label="Frontend performance">
+            <div className="telemetry-heading">
+              <strong>Performance</strong>
+              <span>browser-observed · this session</span>
+            </div>
+            <div className="telemetry-summary">
+              <span><b>p50 total response</b>{formatMs(p50TotalResponse)}<small>last 5 complete turns · speech start to response done</small></span>
+              <span><b>session setup</b>{formatMs(telemetry.sessionSetupMs)}<small>connect start to configured data channel ready</small></span>
+              <span><b>errors</b>{telemetry.errorCount}<small>UI/runtime errors</small></span>
+            </div>
+            {telemetry.turns.length > 0 && (
+              <div className="telemetry-turns">
+                {telemetry.turns.slice().reverse().map((turn) => (
+                  <div key={turn.id}>
+                    <span>{turn.status === "complete" ? "Complete" : "Interrupted"}</span>
+                    <span>transcript latency {formatMs(turn.firstAssistantTranscriptMs)}</span>
+                    <span>audio latency {formatMs(turn.firstAssistantAudioMs)}</span>
+                    <span>total response {formatMs(turn.totalResponseMs)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </aside>
+
+          <div className="conversation-column">
+            <section className="conversation-stage" aria-label="Conversation">
           <div
             className="conversation-list"
             ref={conversationRef}
@@ -432,9 +497,9 @@ function App() {
               ↓ Newest message
             </button>
           )}
-        </section>
+            </section>
 
-        <section className="interaction" aria-labelledby="status-heading">
+            <section className="interaction" aria-labelledby="status-heading">
           <div className={`state-wave ${isLiveConversation ? "active" : ""} ${realtimeState === "responding" ? "speaking" : ""}`} aria-hidden="true">
             <span /><span /><span /><span /><span />
           </div>
@@ -465,8 +530,9 @@ function App() {
               Enable audio
             </button>
           )}
-        </section>
-
+            </section>
+          </div>
+        </div>
       </section>
     </main>
   );

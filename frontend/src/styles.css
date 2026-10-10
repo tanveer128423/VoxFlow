@@ -392,6 +392,12 @@ audio {
     margin-top: 30px;
   }
 
+  .telemetry-summary {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -408,13 +414,22 @@ audio {
 
 .voice-app {
   display: flex;
-  width: min(100%, 1080px);
+  width: min(100%, 1440px);
   height: 100vh;
   min-height: 100vh;
   max-height: 100vh;
   flex-direction: column;
   overflow: hidden;
   padding: 28px clamp(16px, 4vw, 48px) 24px;
+}
+
+.main-layout {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 3fr);
+  gap: clamp(18px, 3vw, 36px);
+  margin-top: 18px;
 }
 
 .brand {
@@ -449,12 +464,98 @@ audio {
 .history-summary {
   width: 100%;
   justify-content: flex-start;
-  margin: 3px 0 0 40px;
+  margin: 6px 0 0;
   text-transform: none;
 }
 
 .connection-status {
   color: #aaa;
+}
+
+.telemetry-panel {
+  flex: 0 0 auto;
+  min-width: 0;
+  align-self: start;
+  margin-top: 0;
+  padding: 9px 12px;
+  border: 1px solid #242424;
+  border-radius: 10px;
+  color: #aaa;
+  background: #050505;
+  font-size: 11px;
+}
+
+.telemetry-heading,
+.telemetry-summary,
+.telemetry-turns div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.telemetry-heading strong {
+  color: #ddd;
+  font-size: 12px;
+}
+
+.telemetry-heading span,
+.telemetry-summary small {
+  color: #666;
+}
+
+.telemetry-summary {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+  margin-top: 7px;
+}
+
+.telemetry-summary span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.telemetry-summary b {
+  color: #aaa;
+  font-weight: 500;
+}
+
+.telemetry-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid #1b1b1b;
+}
+
+.telemetry-turns div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px 10px;
+  padding: 6px 0;
+  color: #777;
+}
+
+.telemetry-turns div + div {
+  border-top: 1px solid #171717;
+}
+
+.telemetry-turns div span:first-child {
+  color: #aaa;
+}
+
+.telemetry-turns span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.conversation-column {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
 }
 
 .conversation-stage {
@@ -463,7 +564,7 @@ audio {
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  margin-top: 24px;
+  margin-top: 0;
 }
 
 .conversation-list {
@@ -473,10 +574,10 @@ audio {
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  gap: 26px;
+  gap: 18px;
   overflow-y: auto;
   margin: 0;
-  padding: 12px 6px 64px;
+  padding: 8px 6px 48px;
   scrollbar-color: #333 transparent;
   scrollbar-width: thin;
 }
@@ -484,7 +585,7 @@ audio {
 .timeline-turn {
   display: flex;
   flex-direction: column;
-  gap: 25px;
+  gap: 16px;
 }
 
 .chat-message {
@@ -616,12 +717,12 @@ audio {
 }
 
 .interaction {
-  position: sticky;
-  bottom: 0;
+  position: relative;
   z-index: 2;
   align-items: center;
   margin: 0;
-  padding: 18px 0 4px;
+  flex: 0 0 auto;
+  padding: 12px 0 4px;
   border-top: 1px solid #1c1c1c;
   background: linear-gradient(#000 15%, #000 100%);
 }
@@ -660,7 +761,7 @@ audio {
 }
 
 .interaction .status-heading {
-  margin: 8px 0 0;
+  margin: 6px 0 0;
   font-size: 16px;
 }
 
@@ -675,7 +776,7 @@ audio {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  margin-top: 14px;
+  margin-top: 10px;
 }
 
 .voice-controls .record-button {
@@ -750,7 +851,18 @@ audio {
   }
 
   .history-summary {
-    margin-left: 32px;
+    margin-left: 0;
+  }
+
+  .main-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin-top: 14px;
+  }
+
+  .telemetry-summary {
+    align-items: flex-start;
   }
 
   .chat-message {
@@ -761,6 +873,20 @@ audio {
     gap: 22px;
     padding-right: 2px;
     padding-left: 2px;
+  }
+
+  .telemetry-summary {
+    gap: 7px 14px;
+    flex-wrap: wrap;
+    flex-direction: row;
+  }
+
+  .telemetry-summary span {
+    min-width: min(100%, 140px);
+  }
+
+  .telemetry-turns div {
+    gap: 5px 10px;
   }
 
   .voice-controls {
